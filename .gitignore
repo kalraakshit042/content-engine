@@ -1,0 +1,11 @@
+.env
+channels/
+content/
+credentials/
+database/*.db
+*.db
+__pycache__/
+*.pyc
+.DS_Store
+logs/
+CLAUDE.md
