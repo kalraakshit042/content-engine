@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Content Engine</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="container header-inner">
+    <div class="logo">Content <span>Engine</span></div>
+    <button class="btn btn-primary" onclick="openModal()">+ Add Channel</button>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- Stats Strip -->
+  <div class="stats-strip">
+    <div class="stat">
+      <span class="stat-value">{{ stats.total_channels }}</span>
+      <span class="stat-label">Channels</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ stats.total_videos }}</span>
+      <span class="stat-label">Videos</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ "{:,}".format(stats.total_views) }}</span>
+      <span class="stat-label">Total Views</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ "{:,}".format(stats.total_likes) }}</span>
+      <span class="stat-label">Total Likes</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ "{:,}".format(stats.total_comments) }}</span>
+      <span class="stat-label">Total Comments</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">${{ "%.4f"|format(stats.total_claude_cost_usd) }}</span>
+      <span class="stat-label">Claude Spend</span>
+    </div>
+  </div>
+
+  <!-- Channels -->
+  <div class="section-header">
+    <span class="section-title">Channels</span>
+    <span class="text-muted">{{ channels|length }} total</span>
+  </div>
+
+  {% if channels %}
+  <div class="cards-grid" id="channels-grid">
+    {% for ch in channels %}
+    <div class="channel-card" id="card-{{ ch.slug }}">
+      <div class="card-header">
+        <div>
+          <div class="card-name">
+            {% if ch.is_live %}
+              <span class="dot dot-live"></span>
+            {% else %}
+              <span class="dot dot-offline"></span>
+            {% endif %}
+            {{ ch.name }}
+          </div>
+        </div>
+        <span class="badge badge-{{ ch.status }}" id="badge-{{ ch.slug }}">
+          {% if ch.status == "configuring" %}⟳ Configuring
+          {% elif ch.status == "active" %}✓ Active
+          {% elif ch.status == "error" %}✕ Error
+          {% else %}… Pending{% endif %}
+        </span>
+      </div>
+
+      <div class="card-description">{{ ch.description }}</div>
+
+      <div class="card-meta">
+        {% if ch.youtube_channel_url %}
+          <span>▶ <a href="{{ ch.youtube_channel_url }}" target="_blank">YouTube</a></span>
+        {% endif %}
+        {% if ch.tiktok_username %}
+          <span>♪ @{{ ch.tiktok_username }}</span>
+        {% endif %}
+        {% if not ch.youtube_channel_url and not ch.tiktok_username %}
+          <span class="text-muted">No platforms linked yet</span>
+        {% endif %}
+      </div>
+
+      <div class="card-meta" style="margin-top:10px;">
+        <span>Claude: <strong>${{ "%.4f"|format(ch.claude_cost_usd or 0) }}</strong></span>
+      </div>
+      <div class="card-meta">
+        <span>YT: <strong>{{ "{:,}".format(ch.youtube_likes or 0) }}</strong> likes, <strong>{{ "{:,}".format(ch.youtube_comments or 0) }}</strong> comments</span>
+      </div>
+      <div class="card-meta">
+        <span>TikTok: <strong>{{ "{:,}".format(ch.tiktok_likes or 0) }}</strong> likes, <strong>{{ "{:,}".format(ch.tiktok_comments or 0) }}</strong> comments</span>
+      </div>
+
+      {% if ch.status == "error" %}
+      <div style="font-size:12px; color: var(--red); padding: 8px; background: rgba(239,68,68,0.08); border-radius: 6px;">
+        {{ ch.error_msg }}
+      </div>
+      {% endif %}
+
+      <div class="card-actions">
+        {% if ch.status == "active" %}
+          <a href="/channel/{{ ch.slug }}" class="btn btn-primary btn-sm">View Channel</a>
+        {% elif ch.status == "error" %}
+          <form method="post" action="/channels/{{ ch.slug }}/retry" style="display:inline">
+            <button class="btn btn-secondary btn-sm" type="submit">Retry</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/channels/{{ ch.slug }}/delete"
+              onsubmit="return confirm('Delete {{ ch.name }}? This cannot be undone.')">
+          <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="empty-state">
+    <div style="font-size: 40px;">🎬</div>
+    <p>No channels yet. Click <strong>+ Add Channel</strong> to get started.</p>
+  </div>
+  {% endif %}
+
+  <div class="section-header" style="margin-top:28px;">
+    <span class="section-title">Cron Status</span>
+    <span class="text-muted">Hourly orchestrator health · all times ET</span>
+  </div>
+
+  <div class="cards-grid" style="grid-template-columns: 1.2fr 1fr 1.2fr;">
+    <div class="channel-card">
+      <div class="card-header">
+        <div class="card-name">Latest Run</div>
+        {% if latest_cron_run %}
+          <span class="badge badge-{{ latest_cron_run.status }}">{{ latest_cron_run.status }}</span>
+        {% else %}
+          <span class="badge">none</span>
+        {% endif %}
+      </div>
+      {% if latest_cron_run %}
+        <div class="card-description">{{ latest_cron_run.summary or 'No summary yet.' }}</div>
+        <div class="card-meta" style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">
+          <span>Started: {{ latest_cron_run.started_at|format_et }}</span>
+          <span>Finished: {{ latest_cron_run.finished_at|format_et }}</span>
+          <span>Trigger: {{ latest_cron_run.triggered_by or 'cron' }}</span>
+          {% if latest_cron_run.error_msg %}
+            <span style="color:var(--red);">Error: {{ latest_cron_run.error_msg }}</span>
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="card-description">No cron runs recorded yet.</div>
+      {% endif %}
+    </div>
+
+    <div class="channel-card">
+      <div class="card-header">
+        <div class="card-name">Recent Runs</div>
+      </div>
+      <div class="card-meta" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+        {% if recent_cron_runs %}
+          {% for run in recent_cron_runs[:6] %}
+            <span>#{{ run.id }} · {{ run.status }} · {{ run.started_at|format_et }}</span>
+          {% endfor %}
+        {% else %}
+          <span class="text-muted">No run history yet</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="channel-card">
+      <div class="card-header">
+        <div class="card-name">Recent Activity</div>
+      </div>
+      <div class="card-meta" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+        {% if recent_cron_events %}
+          {% for event in recent_cron_events[:8] %}
+            <span>[{{ event.level }}] {{ event.created_at|format_et }} — {{ event.message }}</span>
+          {% endfor %}
+        {% else %}
+          <span class="text-muted">No cron events yet</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Add Channel Modal -->
+<div class="modal-overlay" id="modal" onclick="closeModalOnOverlay(event)">
+  <div class="modal">
+    <div class="modal-title">Add New Channel</div>
+    <form method="post" action="/channels">
+      <div class="form-group">
+        <label for="name">Channel Name</label>
+        <input type="text" id="name" name="name" placeholder="e.g. Villain Monologues" required autofocus>
+      </div>
+      <div class="form-group">
+        <label for="description">One-Line Description</label>
+        <textarea id="description" name="description" rows="2"
+          placeholder="e.g. Everyday objects deliver dramatic villain speeches about their petty grievances"
+          required></textarea>
+      </div>
+      <div class="form-group">
+        <label>Posting Times (ET)</label>
+        <div style="display:flex; gap:10px;">
+          <div style="flex:1;">
+            <input type="time" name="slot_1" value="09:00" required style="width:100%;">
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">First slot</div>
+          </div>
+          <div style="flex:1;">
+            <input type="time" name="slot_2" value="17:00" required style="width:100%;">
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Second slot</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Generate Config</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openModal() {
+    document.getElementById('modal').classList.add('open');
+    document.getElementById('name').focus();
+  }
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+  }
+  function closeModalOnOverlay(e) {
+    if (e.target === document.getElementById('modal')) closeModal();
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  // Poll status for any channel that's pending or configuring
+  const pollingSlugs = {{ channels | selectattr('status', 'in', ['pending', 'configuring']) | map(attribute='slug') | list | tojson }};
+
+  if (pollingSlugs.length > 0) {
+    const poll = setInterval(async () => {
+      let allDone = true;
+      for (const slug of pollingSlugs) {
+        const res = await fetch(`/api/channel/${slug}/status`);
+        const data = await res.json();
+        const badge = document.getElementById(`badge-${slug}`);
+        if (data.status === 'pending' || data.status === 'configuring') {
+          allDone = false;
+        } else {
+          // Reload page to show updated card with actions
+          clearInterval(poll);
+          location.reload();
+          return;
+        }
+      }
+      if (allDone) clearInterval(poll);
+    }, 5000);
+  }
+</script>
+
+</body>
+</html>

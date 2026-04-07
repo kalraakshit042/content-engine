@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ channel.name }} — Content Engine</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="container header-inner">
+    <div class="logo">Content <span>Engine</span></div>
+    <a href="/" class="back-link">← All Channels</a>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- Channel Header -->
+  <div class="detail-header">
+    <div>
+      <div class="detail-title">
+        {% if channel.is_live %}
+          <span class="dot dot-live"></span>
+        {% else %}
+          <span class="dot dot-offline"></span>
+        {% endif %}
+        {{ channel.name }}
+        <span class="badge badge-{{ channel.status }}" style="margin-left:8px; vertical-align: middle;">
+          {{ channel.status }}
+        </span>
+      </div>
+      <div class="detail-description">{{ channel.description }}</div>
+      <div class="card-meta" style="margin-top:10px;">
+        <span>Claude total: <strong>${{ "%.4f"|format(total_claude_cost) }}</strong></span>
+        <span>Config: <strong>${{ "%.4f"|format(config_claude_cost) }}</strong></span>
+        <span>Videos: <strong>${{ "%.4f"|format(video_claude_cost) }}</strong></span>
+        <span>Total likes: <strong>{{ "{:,}".format(channel_total_likes) }}</strong></span>
+        <span>Total comments: <strong>{{ "{:,}".format(channel_total_comments) }}</strong></span>
+      </div>
+      {% if claude_costs %}
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer; font-size:12px; color:var(--accent);">View Claude cost details</summary>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          {% for entry in claude_costs[:20] %}
+          <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <span>${{ "%.4f"|format(entry.cost_usd or 0) }} · {{ entry.model or 'claude' }}</span>
+              <span class="text-muted">{{ entry.called_at[:16].replace("T", " ") if entry.called_at else '—' }}</span>
+            </div>
+            <div class="text-muted" style="font-size:11px; margin-top:4px;">
+              {% if entry.video_id %}Video {{ entry.video_id }}{% else %}Channel setup{% endif %}
+              · in {{ "{:,}".format(entry.tokens_input or 0) }} / out {{ "{:,}".format(entry.tokens_output or 0) }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
+      <span id="yt-health-badge" style="font-size:12px;display:none;"></span>
+    </div>
+  </div>
+
+  <!-- Top Grid: Channel Settings + Channel Art -->
+  <div class="detail-grid">
+
+    <!-- Channel Settings -->
+    <div class="card">
+      <div class="card-title">Platform Links</div>
+      <form method="post" action="/channel/{{ channel.slug }}/update">
+
+        <div class="form-group">
+          <label>YouTube Channel URL</label>
+          <input type="url" name="youtube_channel_url"
+            value="{{ channel.youtube_channel_url or '' }}"
+            placeholder="https://www.youtube.com/@YourChannel">
+        </div>
+
+        <div class="form-group">
+          <label>YouTube Channel ID</label>
+          <input type="text" name="youtube_channel_id"
+            value="{{ channel.youtube_channel_id or '' }}"
+            placeholder="UCxxxxxxxxxxxxxxxxxxxx">
+        </div>
+
+        <div class="form-group">
+          <label>TikTok Username</label>
+          <input type="text" name="tiktok_username"
+            value="{{ channel.tiktok_username or '' }}"
+            placeholder="@username">
+        </div>
+
+        <div class="form-group">
+          <label>TikTok URL</label>
+          <input type="url" name="tiktok_channel_url"
+            value="{{ channel.tiktok_channel_url or '' }}"
+            placeholder="https://tiktok.com/@username">
+        </div>
+
+        {% if not channel.tiktok_username %}
+        <p style="font-size:11px;color:var(--yellow);margin-bottom:12px;">⚠ TikTok not linked — uploads will be YouTube only</p>
+        {% endif %}
+        <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
+          <div style="font-size:11px;font-weight:600;margin-bottom:4px;">TikTok POC Auth</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.5;">
+            Save this channel's TikTok cookies export to
+            <code style="font-size:10px;">{{ tiktok_cookies_path }}</code>
+          </div>
+          <div style="font-size:11px;margin-top:6px;color:{% if has_tiktok_cookies %}var(--green){% else %}var(--yellow){% endif %};">
+            {% if has_tiktok_cookies %}✓ cookies file found{% else %}⚠ cookies file missing{% endif %}
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-sm full-width">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Channel Art -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div class="card-title" style="margin-bottom:0;">
+          Channel Art
+          {% if channel.art_status == 'generating' %}
+            <span class="badge badge-configuring" style="margin-left:8px;">⟳ Generating...</span>
+          {% elif channel.art_status == 'done' %}
+            <span class="badge badge-active" style="margin-left:8px;">✓ Done</span>
+          {% elif channel.art_status == 'partial' %}
+            <span class="badge badge-pending" style="margin-left:8px;">⚠ Partial</span>
+          {% elif channel.art_status == 'failed' %}
+            <span class="badge badge-error" style="margin-left:8px;">✕ Failed</span>
+          {% endif %}
+        </div>
+        {% if channel.art_status != 'generating' %}
+        <form method="post" action="/channel/{{ channel.slug }}/regenerate-art">
+          <button class="btn btn-secondary btn-sm" type="submit">↺ Regenerate</button>
+        </form>
+        {% endif %}
+      </div>
+
+      {% if channel.art_status == 'generating' %}
+        <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">
+          Generating images... this takes 1–2 minutes. Page will refresh automatically.
+        </div>
+      {% elif has_profile_pic or has_banner %}
+        <div class="art-preview">
+          {% if has_profile_pic %}
+          <div class="art-item">
+            <img src="/channel-assets/{{ channel.slug }}/profile_pic.png"
+                 width="80" height="80" style="border-radius: 50%;" alt="Profile pic">
+            <span class="art-label">Profile Pic</span>
+            <a class="btn btn-secondary btn-sm"
+               href="/channel-assets/{{ channel.slug }}/profile_pic.png" download>↓</a>
+          </div>
+          {% endif %}
+          {% if has_banner %}
+          <div class="art-item" style="flex:1">
+            <img src="/channel-assets/{{ channel.slug }}/banner.png"
+                 style="width:100%; height:80px; object-fit:cover; border-radius:6px;" alt="Banner">
+            <span class="art-label">Banner (1280×720)</span>
+            <a class="btn btn-secondary btn-sm"
+               href="/channel-assets/{{ channel.slug }}/banner.png" download>↓ Download</a>
+          </div>
+          {% endif %}
+        </div>
+      {% else %}
+        <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">
+          No art yet. Click Regenerate to generate.
+        </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- YouTube Setup Checklist -->
+  <div class="card" id="youtube-checklist-card" style="margin-bottom:20px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:0;">
+        YouTube Studio Setup
+        <span id="youtube-checklist-progress" style="font-size:12px;font-weight:400;color:var(--text-muted);margin-left:8px;"></span>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="toggleChecklist('youtube')" id="youtube-checklist-toggle">Hide</button>
+    </div>
+    <div id="youtube-checklist-body">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+        Finish these once in YouTube Studio. Checked items move to the bottom, and you can always uncheck them later.
+      </p>
+      <div class="checklist checklist-container" id="youtube-checklist-items">
+        {% for item in youtube_setup_items %}
+        <label class="checklist-item{% if item.checked %} checklist-item-done{% endif %}"
+               data-key="{{ item.key }}"
+               data-checked="{{ 'true' if item.checked else 'false' }}"
+               data-order="{{ loop.index0 }}">
+          <input type="checkbox"
+                 {% if item.checked %}checked{% endif %}
+                 onchange="saveChecklist('{{ item.key }}', this.checked)">
+          <div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>{{ item.title }}</strong>
+            </div>
+            <span>{{ item.detail }}</span>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- TikTok Setup Checklist -->
+  <div class="card" id="tiktok-checklist-card" style="margin-bottom:20px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:0;">
+        TikTok Setup
+        <span id="tiktok-checklist-progress" style="font-size:12px;font-weight:400;color:var(--text-muted);margin-left:8px;"></span>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="toggleChecklist('tiktok')" id="tiktok-checklist-toggle">Hide</button>
+    </div>
+    <div id="tiktok-checklist-body">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+        Finish these once for the TikTok account tied to this channel. Checked items move to the bottom, and you can always uncheck them later.
+      </p>
+      <div class="checklist checklist-container" id="tiktok-checklist-items">
+        {% for item in tiktok_setup_items %}
+        <label class="checklist-item{% if item.checked %} checklist-item-done{% endif %}"
+               data-key="{{ item.key }}"
+               data-checked="{{ 'true' if item.checked else 'false' }}"
+               data-order="{{ loop.index0 }}">
+          <input type="checkbox"
+                 {% if item.checked %}checked{% endif %}
+                 onchange="saveChecklist('{{ item.key }}', this.checked)">
+          <div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>{{ item.title }}</strong>
+            </div>
+            <span>{{ item.detail }}</span>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Music Setup (shown only while status == pending_music) -->
+  {% if channel.status == 'pending_music' %}
+  <div class="card" style="margin-bottom: 20px; border: 2px solid var(--accent);">
+    <div class="card-title" style="margin-bottom: 4px;">🎵 Music Setup Required</div>
+    <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 20px;">
+      Download one track per mood from
+      <a href="https://studio.youtube.com/channel/music" target="_blank" style="color:var(--accent);">YouTube Audio Library</a>
+      (free, monetization-safe) and drop it into the folder shown below.
+      The channel activates automatically once all tracks are in place.
+    </p>
+
+    {% if music_error %}
+    <div style="background:#3d1a1a;color:#ff6b6b;padding:10px 14px;border-radius:6px;margin-bottom:16px;font-size:13px;">
+      ⚠ Some mood folders are still missing tracks. Add all tracks before activating.
+    </div>
+    {% endif %}
+
+    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px;">
+      {% for mood_id, info in music_status.items() %}
+      <div style="display:flex; align-items:flex-start; gap:12px; padding:12px 14px;
+                  background: {% if info.has_track %}rgba(34,197,94,0.08){% else %}var(--card-bg){% endif %};
+                  border-radius: 8px; border: 1px solid {% if info.has_track %}rgba(34,197,94,0.3){% else %}var(--border){% endif %};">
+        <div style="font-size:20px; line-height:1; margin-top:2px;">
+          {% if info.has_track %}✅{% else %}⬜{% endif %}
+        </div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:600; font-size:13px; margin-bottom:2px;">{{ mood_id }}</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">{{ info.description[:80] }}{% if info.description|length > 80 %}…{% endif %}</div>
+          <div style="font-size:11px; color:var(--text-muted); font-family:monospace;
+                      background:var(--bg); padding:4px 8px; border-radius:4px; word-break:break-all;">
+            {{ info.folder }}
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+            Search: {% for t in info.search_terms %}<span style="background:var(--border);padding:2px 6px;border-radius:3px;margin-right:4px;">{{ t }}</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div id="music-activate-area">
+      <form method="post" action="/channel/{{ channel.slug }}/activate" id="activate-form">
+        <button type="submit" class="btn btn-primary" id="activate-btn"
+                {% if not music_status.values() | selectattr('has_track') | list | length == music_status | length %}disabled{% endif %}>
+          Activate Channel
+        </button>
+        <span style="font-size:12px; color:var(--text-muted); margin-left:10px;" id="music-progress">
+          {{ music_status.values() | selectattr('has_track') | list | length }} / {{ music_status | length }} moods ready
+        </span>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Videos Table -->
+  <div class="card" style="margin-bottom: 20px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:0;">Videos</div>
+      <div style="display:flex; gap:8px;">
+        <form method="post" action="/channel/{{ channel.slug }}/refresh-stats">
+          <button type="submit" class="btn btn-secondary btn-sm">↻ Stats</button>
+        </form>
+      </div>
+    </div>
+    {% if videos %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Video</th>
+            <th>Planned Time</th>
+            <th>Pipeline</th>
+            <th>YouTube</th>
+            <th>TikTok</th>
+            <th>Claude</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for v in videos %}
+          <tr id="video-row-{{ v.id }}">
+            <td>
+              <div style="font-weight:600; margin-bottom:4px;">{{ v.title or '—' }}</div>
+              <div class="text-muted" style="font-size:12px;">
+                {{ v.subject or '—' }} · {{ v.created_at[:10] }}
+              </div>
+            </td>
+            <td id="scheduled-{{ v.id }}" class="text-muted" style="font-size:0.85em;">
+              {%- if v.scheduled_for -%}
+                {{ v.scheduled_for[:16].replace("T", " ") }} ET
+              {%- else -%}—{%- endif -%}
+            </td>
+            <td>
+              <span class="badge badge-{{ v.status }}" id="status-{{ v.id }}">{{ v.status }}</span>
+            </td>
+            <td id="youtube-{{ v.id }}">
+              {% if v.youtube_status == 'error' %}
+                <div style="color:var(--red);" title="{{ v.youtube_error or 'YouTube upload failed' }}">Failed</div>
+              {% elif v.youtube_status == 'scheduled' %}
+                <div class="text-muted">Queued</div>
+              {% elif v.youtube_url %}
+                <div class="text-green">✓ Posted</div>
+                <div class="text-muted" style="font-size:12px; margin-top:4px;">
+                  {{ "{:,}".format(v.youtube_views or 0) }} views · {{ v.youtube_likes or 0 }} likes · {{ v.youtube_comments or 0 }} comments
+                </div>
+              {% elif v.final_video_path %}
+                <div class="text-muted">Ready</div>
+              {% else %}
+                <div class="text-muted">—</div>
+              {% endif %}
+            </td>
+            <td id="tiktok-{{ v.id }}">
+              {% if v.tiktok_status == 'uploading' %}
+                <div class="text-muted">Uploading…</div>
+              {% elif v.tiktok_status == 'queued' %}
+                <div class="text-muted">Queued</div>
+              {% elif v.tiktok_status == 'scheduled' %}
+                <div class="text-green">Scheduled</div>
+              {% elif v.tiktok_posted %}
+                <div class="text-green">✓ Posted</div>
+              {% elif v.tiktok_status == 'error' %}
+                <div style="color:var(--red);" title="{{ v.tiktok_error or 'TikTok upload failed' }}">Failed</div>
+              {% else %}
+                <div class="text-muted">Pending</div>
+              {% endif %}
+              {% if v.tiktok_url %}
+                <div class="text-muted" style="font-size:12px; margin-top:4px;">
+                  {{ "{:,}".format(v.tiktok_views or 0) }} views · {{ v.tiktok_likes or 0 }} likes · {{ v.tiktok_comments or 0 }} comments
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              {% set cost_info = video_claude_costs.get(v.id) %}
+              {% if cost_info %}
+              <details>
+                <summary style="cursor:pointer;">${{ "%.4f"|format(cost_info.total_usd) }}</summary>
+                <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; min-width:240px;">
+                  {% for entry in cost_info.entries %}
+                  <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; font-size:11px;">
+                    <div>${{ "%.4f"|format(entry.cost_usd or 0) }} · {{ entry.model or 'claude' }}</div>
+                    <div class="text-muted">
+                      in {{ "{:,}".format(entry.tokens_input or 0) }} / out {{ "{:,}".format(entry.tokens_output or 0) }}
+                    </div>
+                    <div class="text-muted">{{ entry.called_at[:16].replace("T", " ") if entry.called_at else '—' }}</div>
+                  </div>
+                  {% endfor %}
+                </div>
+              </details>
+              {% else %}
+              <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                {% if v.status == 'error' %}
+                  <form method="post" action="/channel/{{ channel.slug }}/video/{{ v.id }}/retry" style="display:inline;">
+                    <button type="submit" class="btn btn-secondary btn-sm" style="color:var(--yellow);">↺ Retry</button>
+                  </form>
+                {% endif %}
+                {% if v.final_video_path %}
+                  <a class="btn btn-secondary btn-sm" href="/channel/{{ channel.slug }}/video/{{ v.id }}/preview" target="_blank">▶ Preview</a>
+                  <a class="btn btn-secondary btn-sm" href="/channel/{{ channel.slug }}/video/{{ v.id }}/reveal" title="Show in Finder">📁</a>
+                {% endif %}
+                {% if v.youtube_url %}
+                  <a class="btn btn-secondary btn-sm" href="{{ v.youtube_url }}" target="_blank">YT ↗</a>
+                {% endif %}
+                {% if v.tiktok_url %}
+                  <a class="btn btn-secondary btn-sm" href="{{ v.tiktok_url }}" target="_blank">TT ↗</a>
+                {% endif %}
+              </div>
+              {% if v.tiktok_posted and not v.tiktok_url %}
+                <form method="post" action="/channel/{{ channel.slug }}/video/{{ v.id }}/set-tiktok-url" style="margin-top:6px;display:flex;gap:6px;">
+                  <input type="url" name="tiktok_url" placeholder="Paste TikTok post URL" style="flex:1;min-width:220px;">
+                  <button type="submit" class="btn btn-secondary btn-sm">Save URL</button>
+                </form>
+              {% endif %}
+              {% if not v.tiktok_posted and v.tiktok_status == 'error' and v.tiktok_error %}
+                <div style="margin-top:6px;font-size:11px;color:var(--red);max-width:280px;white-space:normal;">
+                  {{ v.tiktok_error }}
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div style="font-size: 32px;">🎬</div>
+      <p>No videos yet. Hit <strong>Generate Video</strong> to create the first one.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Claude Config Viewer -->
+  {% if channel_config %}
+  <div class="card" style="margin-bottom: 20px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <div class="card-title" style="margin-bottom:0;">Creative Config</div>
+      <button onclick="toggleConfig()" id="config-toggle-btn" class="btn btn-secondary btn-sm">Show</button>
+    </div>
+
+    <div id="config-panel" style="display:none;">
+
+      {% if channel_config.tiktok_bio %}
+      <div style="margin-bottom:20px; padding:14px 16px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:10px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:8px;">TikTok Bio</div>
+        <div style="font-size:14px;line-height:1.5;">{{ channel_config.tiktok_bio }}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">{{ channel_config.tiktok_bio|length }}/80 chars</div>
+      </div>
+      {% endif %}
+
+      <!-- Narrative Bible -->
+      {% if channel_config.narrative_bible %}
+      <div style="margin-bottom:24px; padding:16px; background:rgba(108,99,255,0.08); border:1px solid rgba(108,99,255,0.25); border-radius:10px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:14px;">Narrative Bible</div>
+
+        <div style="margin-bottom:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">THE WORLD</div>
+          <p style="font-size:13px;line-height:1.6;">{{ channel_config.narrative_bible.world }}</p>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">CHARACTER RULES</div>
+            <ul style="list-style:none;display:flex;flex-direction:column;gap:5px;">
+              {% for rule in channel_config.narrative_bible.character_rules %}
+              <li style="font-size:12px;display:flex;gap:6px;"><span style="color:var(--accent);">→</span> {{ rule }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">WHAT TO AVOID</div>
+            <ul style="list-style:none;display:flex;flex-direction:column;gap:5px;">
+              {% for item in channel_config.narrative_bible.what_to_avoid %}
+              <li style="font-size:12px;display:flex;gap:6px;"><span style="color:var(--red);">✕</span> {{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">UNIVERSE LORE</div>
+          <div style="display:flex;flex-direction:column;gap:5px;">
+            {% for lore in channel_config.narrative_bible.universe_lore %}
+            <div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">{{ lore }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Content Formula -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Content Formula</div>
+        <p style="font-size:13px;margin-bottom:6px;">{{ channel_config.content_formula.structure }}</p>
+        <p style="font-size:12px;color:var(--text-muted);">Hook: {{ channel_config.content_formula.hook_strategy }}</p>
+        <p style="font-size:12px;color:var(--text-muted);">Duration: {{ channel_config.content_formula.target_duration_seconds[0] }}–{{ channel_config.content_formula.target_duration_seconds[1] }}s</p>
+      </div>
+
+      <!-- Tone Variations -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Tone Variations ({{ channel_config.tone_variations|length }})</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;">
+          {% for tone in channel_config.tone_variations %}
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">{{ tone.id }}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">{{ tone.description }}</div>
+            <div style="font-size:11px;color:var(--text);font-style:italic;">"{{ tone.example_line }}"</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Visual Styles -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Visual Styles ({{ channel_config.visual_styles|length }})</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;">
+          {% for style in channel_config.visual_styles %}
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">{{ style.id }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">{{ style.description }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Voice + Music side by side -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Voice Styles</div>
+          {% for v in channel_config.voice_styles %}
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:2px;">{{ v.id }}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">{{ v.description }}</div>
+            <div style="font-size:10px;color:var(--accent);">{{ v.tts_settings.voice_id }} · speed {{ v.tts_settings.speed }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Music Moods</div>
+          {% for m in channel_config.music_moods %}
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:2px;">{{ m.id }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">{{ m.description }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Title Templates -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Title Templates</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          {% for t in channel_config.title_templates %}
+          <span style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;">{{ t }}</span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Subject Bank -->
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:10px;">Subject Bank ({{ channel_config.subject_bank|length }} subjects)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow-y:auto;">
+          {% for s in channel_config.subject_bank %}
+          <span style="background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--text-muted);">{{ s }}</span>
+          {% endfor %}
+        </div>
+      </div>
+
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Cost Summary -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom: 12px;">Claude Cost Breakdown</div>
+    {% if claude_costs %}
+      <div class="cost-row">
+        <span>Config generation</span>
+        <span>${{ "%.4f"|format(config_claude_cost) }}</span>
+      </div>
+      <div class="cost-row">
+        <span>Video generation</span>
+        <span>${{ "%.4f"|format(video_claude_cost) }}</span>
+      </div>
+      <div class="cost-row">
+        <span>Total Claude</span>
+        <span>${{ "%.4f"|format(total_claude_cost) }}</span>
+      </div>
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer; color:var(--accent);">View detailed Claude calls</summary>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          {% for entry in claude_costs %}
+          <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <span>${{ "%.4f"|format(entry.cost_usd or 0) }} · {{ entry.model or 'claude' }}</span>
+              <span class="text-muted">{{ entry.called_at[:16].replace("T", " ") if entry.called_at else '—' }}</span>
+            </div>
+            <div class="text-muted" style="font-size:11px; margin-top:4px;">
+              {% if entry.video_id %}Video {{ entry.video_id }}{% else %}Channel setup{% endif %}
+              · input {{ "{:,}".format(entry.tokens_input or 0) }} · output {{ "{:,}".format(entry.tokens_output or 0) }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+    {% else %}
+      <p class="text-muted" style="font-size:13px;">No Claude costs logged yet.</p>
+    {% endif %}
+  </div>
+
+</main>
+
+<script>
+  // Restore config panel state before potential reload
+  if (location.hash === '#config-open') {
+    document.getElementById('config-panel').style.display = 'block';
+    document.getElementById('config-toggle-btn').textContent = 'Hide';
+  }
+
+  // Auto-refresh while channel is configuring or art is generating
+  {% if channel.status in ['pending', 'configuring'] or channel.art_status == 'generating' %}
+  setTimeout(() => location.reload(), 5000);
+  {% endif %}
+
+  // Poll music status every 5s while pending_music — update checkmarks without full reload
+  {% if channel.status == 'pending_music' %}
+  (function pollMusic() {
+    fetch('/api/channel/{{ channel.slug }}/music-status')
+      .then(r => r.json())
+      .then(data => {
+        if (data.complete) {
+          // All tracks in — enable activate button and update progress
+          const btn = document.getElementById('activate-btn');
+          const prog = document.getElementById('music-progress');
+          if (btn) btn.removeAttribute('disabled');
+          if (prog) {
+            const total = Object.keys(data.moods).length;
+            prog.textContent = total + ' / ' + total + ' moods ready';
+          }
+          // Reload to get fresh checkmarks rendered server-side
+          location.reload();
+        } else {
+          setTimeout(pollMusic, 5000);
+        }
+      })
+      .catch(() => setTimeout(pollMusic, 10000));
+  })();
+  {% endif %}
+
+  // Live video status polling
+  const STATUS_LABELS = {
+    generating_script:  'Writing script…',
+    generating_audio:   'Generating audio…',
+    generating_video:   'Assembling video…',
+    uploading:          'Uploading…',
+    published:          'Published',
+    scheduled:          'Scheduled',
+    video_done:         'Ready',
+    scripted:           'Scripted',
+    error:              'Error',
+  };
+  const TIKTOK_LABELS = {
+    queued: 'Queued',
+    uploading: 'Uploading…',
+    scheduled: 'Scheduled',
+    posted: 'Posted',
+    error: 'Failed',
+  };
+  const YOUTUBE_LABELS = {
+    scheduled: 'Queued',
+    posted: 'Posted',
+    error: 'Failed',
+  };
+  const TERMINAL = new Set(['published', 'scheduled', 'video_done', 'scripted', 'error']);
+  const TIKTOK_ACTIVE = new Set(['queued', 'uploading']);
+
+  (function pollVideos() {
+    fetch('/api/channel/{{ channel.slug }}/videos')
+      .then(r => r.json())
+      .then(videos => {
+        let anyActive = false;
+        videos.forEach(v => {
+          const badge = document.getElementById('status-' + v.id);
+          if (badge) {
+            badge.textContent = STATUS_LABELS[v.status] || v.status;
+            badge.className = 'badge badge-' + v.status;
+          }
+          const schedCell = document.getElementById('scheduled-' + v.id);
+          if (schedCell && v.scheduled_for) {
+            schedCell.textContent = v.scheduled_for.slice(0, 16).replace('T', ' ') + ' ET';
+          }
+          const ytCell = document.getElementById('youtube-' + v.id);
+          if (ytCell) {
+            if (v.youtube_url) {
+              const views = Number(v.youtube_views || 0).toLocaleString();
+              const likes = Number(v.youtube_likes || 0).toLocaleString();
+              const comments = Number(v.youtube_comments || 0).toLocaleString();
+              ytCell.innerHTML = `<div class="text-green">✓ Posted</div><div class="text-muted" style="font-size:12px; margin-top:4px;">${views} views · ${likes} likes · ${comments} comments</div>`;
+            } else if (v.youtube_status === 'error') {
+              const msg = (v.youtube_error || 'YouTube upload failed').replace(/"/g, '&quot;');
+              ytCell.innerHTML = '<div style="color:var(--red);" title="' + msg + '">Failed</div>';
+            } else if (v.youtube_status) {
+              ytCell.innerHTML = '<div class="text-muted">' + (YOUTUBE_LABELS[v.youtube_status] || v.youtube_status) + '</div>';
+            }
+          }
+          const ttCell = document.getElementById('tiktok-' + v.id);
+          if (ttCell) {
+            if (v.tiktok_posted) {
+              const views = Number(v.tiktok_views || 0).toLocaleString();
+              const likes = Number(v.tiktok_likes || 0).toLocaleString();
+              const comments = Number(v.tiktok_comments || 0).toLocaleString();
+              ttCell.innerHTML = `<div class="text-green">✓ Posted</div><div class="text-muted" style="font-size:12px; margin-top:4px;">${views} views · ${likes} likes · ${comments} comments</div>`;
+            } else if (v.tiktok_status === 'error') {
+              const msg = (v.tiktok_error || 'TikTok upload failed').replace(/"/g, '&quot;');
+              ttCell.innerHTML = '<div style="color:var(--red);" title="' + msg + '">Failed</div>';
+            } else if (v.tiktok_status) {
+              ttCell.innerHTML = '<div class="text-muted">' + (TIKTOK_LABELS[v.tiktok_status] || v.tiktok_status) + '</div>';
+            }
+          }
+          if (!TERMINAL.has(v.status)) anyActive = true;
+          if (TIKTOK_ACTIVE.has(v.tiktok_status)) anyActive = true;
+        });
+        if (anyActive) {
+          sessionStorage.removeItem('reloaded_{{ channel.slug }}');
+          setTimeout(pollVideos, 3000);
+        } else if (!sessionStorage.getItem('reloaded_{{ channel.slug }}')) {
+          // All videos done — reload once to populate title/subject/stats
+          sessionStorage.setItem('reloaded_{{ channel.slug }}', '1');
+          location.reload();
+        }
+      })
+      .catch(() => setTimeout(pollVideos, 5000));
+  })();
+
+  const YOUTUBE_CHECKLIST_COLLAPSED_KEY = 'youtube_checklist_{{ channel.slug }}_collapsed';
+  const TIKTOK_CHECKLIST_COLLAPSED_KEY = 'tiktok_checklist_{{ channel.slug }}_collapsed';
+
+  function renderChecklistOrder(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const items = Array.from(container.querySelectorAll('.checklist-item'));
+    items.sort((a, b) => {
+      const aChecked = a.dataset.checked === 'true' ? 1 : 0;
+      const bChecked = b.dataset.checked === 'true' ? 1 : 0;
+      if (aChecked !== bChecked) return aChecked - bChecked;
+      return Number(a.dataset.order || 0) - Number(b.dataset.order || 0);
+    });
+    items.forEach(item => container.appendChild(item));
+  }
+
+  async function saveChecklist(key, checked) {
+    const body = new URLSearchParams();
+    body.set('key', key);
+    body.set('checked', checked ? 'true' : 'false');
+
+    const res = await fetch('/channel/{{ channel.slug }}/checklist', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: body.toString()
+    });
+    if (!res.ok) {
+      location.reload();
+      return;
+    }
+    const data = await res.json();
+    const item = document.querySelector(`.checklist-item[data-key="${key}"]`);
+    if (item) {
+      item.dataset.checked = checked ? 'true' : 'false';
+      item.classList.toggle('checklist-item-done', checked);
+    }
+    updateChecklistProgress('youtube-checklist-items', 'youtube-checklist-progress');
+    updateChecklistProgress('tiktok-checklist-items', 'tiktok-checklist-progress');
+    renderChecklistOrder('youtube-checklist-items');
+    renderChecklistOrder('tiktok-checklist-items');
+  }
+
+  function updateProgress(elId, done, total) {
+    const el = document.getElementById(elId);
+    el.textContent = done === total ? '✓ All done' : `${done}/${total} done`;
+    el.style.color = done === total ? 'var(--green)' : 'var(--text-muted)';
+  }
+
+  function updateChecklistProgress(containerId, progressId) {
+    const items = document.querySelectorAll(`#${containerId} .checklist-item`);
+    const done = Array.from(items).filter(item => item.dataset.checked === 'true').length;
+    updateProgress(progressId, done, items.length);
+  }
+
+  function toggleChecklist(kind) {
+    const body = document.getElementById(`${kind}-checklist-body`);
+    const btn = document.getElementById(`${kind}-checklist-toggle`);
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    btn.textContent = hidden ? 'Hide' : 'Show';
+    const storageKey = kind === 'youtube' ? YOUTUBE_CHECKLIST_COLLAPSED_KEY : TIKTOK_CHECKLIST_COLLAPSED_KEY;
+    localStorage.setItem(storageKey, hidden ? '0' : '1');
+  }
+
+  (function initChecklists() {
+    updateChecklistProgress('youtube-checklist-items', 'youtube-checklist-progress');
+    updateChecklistProgress('tiktok-checklist-items', 'tiktok-checklist-progress');
+    renderChecklistOrder('youtube-checklist-items');
+    renderChecklistOrder('tiktok-checklist-items');
+
+    const ytCollapsed = localStorage.getItem(YOUTUBE_CHECKLIST_COLLAPSED_KEY);
+    if (ytCollapsed === '1') {
+      document.getElementById('youtube-checklist-body').style.display = 'none';
+      document.getElementById('youtube-checklist-toggle').textContent = 'Show';
+    }
+
+    const ttCollapsed = localStorage.getItem(TIKTOK_CHECKLIST_COLLAPSED_KEY);
+    if (ttCollapsed === '1') {
+      document.getElementById('tiktok-checklist-body').style.display = 'none';
+      document.getElementById('tiktok-checklist-toggle').textContent = 'Show';
+    }
+  })();
+
+  // YouTube OAuth health check
+  fetch('/api/channel/{{ channel.slug }}/youtube-health')
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) {
+        const badge = document.getElementById('yt-health-badge');
+        badge.innerHTML = '⚠ YouTube token expired &nbsp;<a href="/channel/{{ channel.slug }}/youtube-auth" class="btn btn-secondary btn-sm">Re-authenticate</a>';
+        badge.style.color = 'var(--yellow)';
+        badge.style.display = 'flex';
+        badge.style.alignItems = 'center';
+        badge.style.gap = '8px';
+      }
+    })
+    .catch(() => {});
+
+  function toggleConfig() {
+    const panel = document.getElementById('config-panel');
+    const btn = document.getElementById('config-toggle-btn');
+    const visible = panel.style.display !== 'none';
+    panel.style.display = visible ? 'none' : 'block';
+    btn.textContent = visible ? 'Show' : 'Hide';
+    // Persist state in URL hash so auto-refresh doesn't collapse it
+    location.hash = visible ? '' : 'config-open';
+  }
+</script>
+</body>
+</html>
