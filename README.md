@@ -1,6 +1,6 @@
 # Content Engine
 
-Fully automated YouTube Shorts factory — topic to upload, zero human input after setup.
+Fully automated YouTube Shorts factory — topic to upload, minimal input after setup.
 
 **Status: Live and actively iterating.**
 
