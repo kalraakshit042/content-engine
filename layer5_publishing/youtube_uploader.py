@@ -41,6 +41,7 @@ from database.queries import (
     get_live_channels,
     set_youtube_status,
     update_video_youtube,
+    count_posted_today,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -400,12 +401,34 @@ def publish_video_now(slug: str, video_id: int) -> str:
     return yt_video_id
 
 
+def _daily_budget(channel_slug: str) -> int:
+    """Return max videos/day for this channel based on its age."""
+    from datetime import date as _date
+    channel = get_channel(channel_slug)
+    created_at = channel.get("created_at") if channel else None
+    if not created_at:
+        return 1
+    try:
+        days_live = (_date.today() - _date.fromisoformat(created_at[:10])).days
+    except (ValueError, TypeError):
+        return 1
+    if days_live < 7:
+        return 1
+    elif days_live < 28:
+        return 2
+    else:
+        return 3
+
+
 def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
     published = 0
     skipped = 0
     failed = 0
     details: list[dict] = []
     now = datetime.now(timezone.utc)
+
+    # Track how many we've published this run per channel (on top of what's already in DB)
+    posted_today: dict[str, int] = {}
 
     if slug:
         videos = get_channel_videos(slug)
@@ -415,18 +438,20 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
             videos.extend(get_channel_videos(channel["slug"]))
 
     for video in videos:
+        ch = video["channel_slug"]
+
         if not video.get("final_video_path"):
             skipped += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "skipped", "reason": "missing_video"})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "missing_video"})
             continue
         if video.get("youtube_video_id") or video.get("youtube_status") in {"posted", "uploading"}:
             skipped += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "skipped", "reason": "already_posted"})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "already_posted"})
             continue
         scheduled_for = video.get("scheduled_for")
         if not scheduled_for:
             skipped += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "skipped", "reason": "missing_schedule"})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "missing_schedule"})
             continue
         try:
             slot_dt = datetime.fromisoformat(scheduled_for)
@@ -435,19 +460,30 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
             slot_utc = slot_dt.astimezone(timezone.utc)
         except Exception:
             skipped += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "skipped", "reason": "bad_schedule"})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "bad_schedule"})
             continue
         if slot_utc > now:
             skipped += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "skipped", "reason": "not_due"})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "not_due"})
             continue
+
+        # Daily budget check — count already posted today + published this run
+        if ch not in posted_today:
+            posted_today[ch] = count_posted_today(ch)
+        budget = _daily_budget(ch)
+        if posted_today[ch] >= budget:
+            skipped += 1
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": f"daily_budget_reached ({posted_today[ch]}/{budget})"})
+            continue
+
         try:
-            publish_video_now(video["channel_slug"], video["id"])
+            publish_video_now(ch, video["id"])
             published += 1
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "published"})
+            posted_today[ch] += 1
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "published"})
         except Exception as exc:
             failed += 1
             set_youtube_status(video["id"], "error", str(exc)[:500])
-            details.append({"video_id": video["id"], "channel_slug": video["channel_slug"], "status": "failed", "reason": str(exc)[:500]})
+            details.append({"video_id": video["id"], "channel_slug": ch, "status": "failed", "reason": str(exc)[:500]})
 
     return {"published": published, "skipped": skipped, "failed": failed, "details": details}
