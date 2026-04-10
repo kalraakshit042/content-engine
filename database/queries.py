@@ -224,6 +224,19 @@ def get_published_videos(channel_slug: str) -> list:
     return [dict(r) for r in rows]
 
 
+def count_posted_today(channel_slug: str) -> int:
+    """Count videos posted to YouTube today (UTC) for this channel."""
+    with _connect("videos") as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM videos
+               WHERE channel_slug = ?
+               AND youtube_status = 'posted'
+               AND youtube_posted_at >= date('now')""",
+            (channel_slug,),
+        ).fetchone()
+    return row[0] if row else 0
+
+
 def update_video_stats(video_id: int, views: int, comments: int, likes: int) -> None:
     conn = _connect("videos")
     conn.execute(
