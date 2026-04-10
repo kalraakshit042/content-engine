@@ -170,3 +170,4 @@ channel configs, music tracks, and generated content are all private.
 - What makes one subject resonate while another dies in the first seed batch?
 - If a video hits 1M views, what breaks first?
 - When does the channel reach sufficient scale to run controlled experiments rather than multi-variable debugging?
+- At what point does 'zero human input' become a ceiling rather than a feature — and where specifically would human taste reintroduce the most value?
