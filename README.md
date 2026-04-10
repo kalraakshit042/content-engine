@@ -24,15 +24,15 @@ operation at scale with zero production overhead?
 Two live YouTube channels. One video per day each. Every step automated —
 subject selection, scripting, voiceover, video assembly, publishing,
 and failure recovery. The only human input is the initial channel setup.
-
-**Villain Monologues** — household objects delivering bitter dramatic monologues
-**Digital Overlords** — AI/tech systems confessing their control over human behavior
+If the unit economics hold, the architecture is designed to add new channels
+with no additional engineering — just a new config file.
 
 ---
 
 ## What I've Learned So Far
 
-The pipeline wasn't the hard part. The feedback loop was.
+The pipeline isn't the hard part. The feedback loop is. Building the system
+took four days. Understanding why the output wasn't performing took longer.
 
 Early videos had 70%+ swipe-away rates. Diagnosing why required reading
 YouTube Studio retention curves and tracing problems back through every layer:
@@ -91,7 +91,9 @@ State                        → SQLite (4 databases)
 
 ### Scheduler
 - macOS crontab, runs hourly
-- Age-based posting budget (1/day weeks 1–2, scales up after)
+- Age-based posting budget: 1/day for the first two weeks to warm up new accounts
+  and avoid YouTube's early-channel spam signals, scaling up as the channel
+  establishes history
 - Randomized posting windows within 10AM–8PM to avoid pattern detection
 
 ### Dashboard
@@ -106,17 +108,17 @@ State                        → SQLite (4 databases)
 Zero per-video cost. Runs locally. At 2 videos/day that compounds fast.
 
 **Why per-act word budgets instead of total word count?**
-Claude Haiku ignores total limits. Act-level ceilings with a retry loop
-is the only reliable enforcement.
+First attempt used a total word count instruction in the prompt ("write 90–110 words
+total"). Claude Haiku consistently ignored it — scripts came back at 150–180 words,
+which meant TTS ran 70+ seconds and retention collapsed. Root cause: Haiku treats
+total count as a soft suggestion, not a constraint. The fix was structural: hard
+per-act ceilings (Hook ≤12, Build ≤30, Re-hook ≤25, Peak ≤25), validated in Python
+after each generation attempt. Violations get fed back into the next prompt turn
+explicitly. Three attempts, then pick the least-bad result.
 
 **Why SQLite over Postgres?**
 Single-machine deployment. No ops overhead. Four databases for clean
 separation: videos, subjects, schedules, publishing state.
-
-**Why remove atempo normalization?**
-Artificially speeding or slowing TTS to hit a duration target sounds
-robotic. Right-sized scripts at natural speed sound better.
-The word budget is the real control.
 
 ---
 

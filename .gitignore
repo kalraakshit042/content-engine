@@ -9,3 +9,6 @@ __pycache__/
 .DS_Store
 logs/
 CLAUDE.md
+PROJECT_LOG.md
+post_storage_migration.py
+backup_content_engine.py
