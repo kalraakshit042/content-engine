@@ -35,6 +35,7 @@ from content_paths import resolve_script_json_path, resolve_thumbnail_path
 from layer1_account_setup.config_schema import ChannelConfig
 from database.queries import (
     get_video,
+    get_channel,
     get_scheduled_slots,
     get_channel_videos,
     get_live_channels,
@@ -43,8 +44,6 @@ from database.queries import (
 )
 
 ET = ZoneInfo("America/New_York")
-# Publish slots in ET (hour, minute)
-PUBLISH_SLOTS = [(9, 0), (17, 0)]
 
 load_dotenv(override=True)
 
@@ -65,39 +64,50 @@ CATEGORY_ENTERTAINMENT = "24"
 
 def next_publish_slot(slug: str) -> datetime:
     """
-    Returns the next available publish slot for the channel (as ET-aware datetime).
-    Slots are read from channel_config.json publish_slots (HH:MM ET, 24h).
-    Falls back to global PUBLISH_SLOTS if not configured.
-    Skips slots already occupied by a scheduled video.
+    Returns the next available publish slot using the dynamic schedule.
+    Mirrors scheduler._slots_for_channel() — seeded by slug+date, 10AM–8PM ET window,
+    scales 1→2→3 videos/day by channel age. Skips already-occupied slots.
     """
+    import random as _rng
+    from datetime import date as _date
+
     occupied = set(get_scheduled_slots(slug))
-
-    # Load per-channel slots from config
-    try:
-        config = _load_channel_config(slug)
-        raw_slots = config.publish_slots  # e.g. ["09:00", "17:00"]
-        slots = []
-        for s in raw_slots:
-            h, m = map(int, s.split(":"))
-            slots.append((h, m))
-    except Exception:
-        slots = PUBLISH_SLOTS
-
-    slots = sorted(slots)
     now_et = datetime.now(ET)
     search_from = now_et + timedelta(minutes=5)
 
+    # Determine videos/day based on channel age
+    channel = get_channel(slug)
+    created_at = channel.get("created_at") if channel else None
+    days_live = 0
+    if created_at:
+        try:
+            days_live = (_date.today() - _date.fromisoformat(created_at[:10])).days
+        except (ValueError, TypeError):
+            pass
+    if days_live < 7:
+        n_per_day = 1
+    elif days_live < 28:
+        n_per_day = 2
+    else:
+        n_per_day = 3
+
     for day_offset in range(30):
         candidate_date = (now_et + timedelta(days=day_offset)).date()
-        for hour, minute in slots:
+        rng = _rng.Random(f"{slug}-{candidate_date.isoformat()}")
+        window_start, window_end = 10 * 60, 20 * 60  # 10AM–8PM in minutes
+        segment = (window_end - window_start) // n_per_day
+        slot_times = sorted(
+            (window_start + i * segment + rng.randint(0, segment - 1))
+            for i in range(n_per_day)
+        )
+        for total_minutes in slot_times:
             slot_et = datetime(
                 candidate_date.year, candidate_date.month, candidate_date.day,
-                hour, minute, 0, tzinfo=ET,
+                total_minutes // 60, total_minutes % 60, 0, tzinfo=ET,
             )
             if slot_et <= search_from:
                 continue
-            slot_iso = slot_et.isoformat()
-            if slot_iso not in occupied:
+            if slot_et.isoformat() not in occupied:
                 return slot_et
 
     raise RuntimeError("Could not find a free publish slot in the next 30 days")

@@ -53,7 +53,6 @@ from layer4_video_production.video_assembler import assemble_video
 from layer5_publishing.tiktok_uploader import publish_due_queued_videos as publish_due_tiktok_videos
 from layer5_publishing.youtube_uploader import (
     ET,
-    PUBLISH_SLOTS,
     publish_due_queued_videos as publish_due_youtube_videos,
 )
 
@@ -98,30 +97,6 @@ def send_failure_email(subject: str, body: str, run_id: int) -> bool:
     except Exception as exc:
         log(run_id, f"Failure email failed: {exc}", level="error", action="email_failed")
         return False
-
-
-def planned_slots_for_window(now_et: datetime, horizon_days: int = HORIZON_DAYS) -> list[datetime]:
-    slots: list[datetime] = []
-    end_et = now_et + timedelta(days=horizon_days)
-
-    for day_offset in range(horizon_days + 1):
-        candidate_date = (now_et + timedelta(days=day_offset)).date()
-        for hour, minute in PUBLISH_SLOTS:
-            slot_et = datetime(
-                candidate_date.year,
-                candidate_date.month,
-                candidate_date.day,
-                hour,
-                minute,
-                tzinfo=ET,
-            )
-            if slot_et <= now_et:
-                continue
-            if slot_et > end_et:
-                continue
-            slots.append(slot_et)
-
-    return sorted(slots)
 
 
 def _parse_slot_utc(scheduled_for: str | None) -> datetime | None:
