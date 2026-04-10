@@ -159,3 +159,13 @@ python3 scheduler.py   # or add to crontab
 
 `.env`, `credentials/`, `channels/`, `*.db` — API keys, OAuth tokens,
 channel configs, music tracks, and generated content are all private.
+
+---
+
+## Open Questions I'm Working Through
+
+- Who is the core audience and what emotional job does this content do for them?
+- Where should human judgment stay in the loop — and what quality am I
+  trading away by removing it?
+- What makes one subject resonate while another dies in the first seed batch?
+- If a video hits 1M views, what breaks first?
