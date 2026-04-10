@@ -70,6 +70,8 @@ State                        → SQLite (4 databases)
 - Fallback: pick least-bad attempt on third failure
 - Output: `script.json` with 4 acts — Hook, Build, Re-hook, Peak
 
+*Prompt design matters as much as the code — per-act hard ceilings with explicit violation feedback outperform total word count instructions for length control with Haiku.*
+
 ### Layer 3 — Audio Production (Kokoro TTS)
 - Runs locally, zero per-video API cost
 - Per-act speed tuning: Hook +0.10 faster, Peak -0.08 slower for dramatic effect
