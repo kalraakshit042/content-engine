@@ -43,6 +43,7 @@ from database.queries import (
     set_video_tiktok_scheduled_for,
     update_tiktok_stats,
     update_video_tiktok,
+    count_tiktok_posted_today,
 )
 
 from layer1_account_setup.config_schema import ChannelConfig
@@ -729,6 +730,25 @@ def schedule_pending_videos(slug: str) -> dict[str, int]:
     return {"queued": queued, "skipped": skipped, "failed": failed}
 
 
+def _tiktok_daily_budget(channel_slug: str) -> int:
+    """Return max TikTok videos/day for this channel based on its age."""
+    from datetime import date as _date
+    channel = get_channel(channel_slug)
+    created_at = channel.get("created_at") if channel else None
+    if not created_at:
+        return 1
+    try:
+        days_live = (_date.today() - _date.fromisoformat(created_at[:10])).days
+    except (ValueError, TypeError):
+        return 1
+    if days_live < 7:
+        return 1
+    elif days_live < 28:
+        return 2
+    else:
+        return 3
+
+
 def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
     """
     Publish all due queued TikTok videos.
@@ -745,6 +765,9 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
     failed = 0
     details: list[dict] = []
     now = datetime.now(timezone.utc)
+
+    # Track how many we've published this run per channel (on top of what's already in DB)
+    posted_today: dict[str, int] = {}
 
     worker = Path(__file__).parent / "_tiktok_worker.py"
 
@@ -771,6 +794,16 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
 
         vid_id = video["id"]
         chan_slug = video["channel_slug"]
+
+        # Daily budget check — count already posted today + published this run
+        if chan_slug not in posted_today:
+            posted_today[chan_slug] = count_tiktok_posted_today(chan_slug)
+        budget = _tiktok_daily_budget(chan_slug)
+        if posted_today[chan_slug] >= budget:
+            skipped += 1
+            details.append({"video_id": vid_id, "channel_slug": chan_slug, "status": "skipped", "reason": f"daily_budget_reached ({posted_today[chan_slug]}/{budget})"})
+            continue
+
         try:
             result = subprocess.run(
                 [sys.executable, str(worker), chan_slug, str(vid_id)],
@@ -779,6 +812,7 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
             )
             if result.returncode == 0:
                 published += 1
+                posted_today[chan_slug] += 1
                 details.append({"video_id": vid_id, "channel_slug": chan_slug, "status": "published"})
             else:
                 err = (result.stderr or "").strip() or f"worker exited {result.returncode}"
