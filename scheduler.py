@@ -7,8 +7,8 @@ Hourly orchestration job for the content engine.
 
 Responsibilities:
 1. Publish any due queued videos to YouTube and TikTok.
-2. Ensure each live channel has generated videos covering the next 2 days of
-   planned posting slots.
+2. Ensure each live channel generates at most 1 video per cron tick when a
+   posting slot has arrived.
 
 Recommended cron:
   0 * * * * cd /Users/akshitkalra/Code/Content\ automation/content-engine && \
@@ -40,6 +40,7 @@ from database.queries import (
     create_cron_run,
     finish_cron_run,
     get_channel,
+    get_channel_videos,
     get_live_channels,
     insert_video,
     log_cron_event,
@@ -365,7 +366,7 @@ def generate_due_videos(run_id: int) -> dict[str, int]:
             continue
 
         already_posted = count_posted_today(slug)
-        to_generate = max(0, len(due_slots) - already_posted)
+        to_generate = min(1, max(0, len(due_slots) - already_posted))
         if to_generate == 0:
             continue
 
