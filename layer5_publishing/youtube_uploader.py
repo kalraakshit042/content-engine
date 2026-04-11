@@ -444,7 +444,7 @@ def publish_due_queued_videos(slug: str | None = None) -> dict[str, int]:
             skipped += 1
             details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "missing_video"})
             continue
-        if video.get("youtube_video_id") or video.get("youtube_status") in {"posted", "uploading"}:
+        if video.get("youtube_video_id") or video.get("youtube_status") in {"posted", "uploading", "error"}:
             skipped += 1
             details.append({"video_id": video["id"], "channel_slug": ch, "status": "skipped", "reason": "already_posted"})
             continue

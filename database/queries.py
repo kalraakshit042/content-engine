@@ -225,14 +225,41 @@ def get_published_videos(channel_slug: str) -> list:
 
 
 def count_posted_today(channel_slug: str) -> int:
-    """Count videos posted to YouTube today (UTC) for this channel."""
+    """Count videos posted to YouTube since midnight ET today."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+    _UTC = ZoneInfo("UTC")
+    now_et = datetime.now(_ET)
+    today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
     with _connect("videos") as conn:
         row = conn.execute(
             """SELECT COUNT(*) FROM videos
                WHERE channel_slug = ?
                AND youtube_status = 'posted'
-               AND youtube_posted_at >= date('now')""",
-            (channel_slug,),
+               AND youtube_posted_at >= ?""",
+            (channel_slug, today_et_start_utc),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def count_tiktok_posted_today(channel_slug: str) -> int:
+    """Count videos posted to TikTok since midnight ET today."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+    _UTC = ZoneInfo("UTC")
+    now_et = datetime.now(_ET)
+    today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
+    with _connect("videos") as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM videos
+               WHERE channel_slug = ?
+               AND tiktok_status = 'posted'
+               AND tiktok_posted_at >= ?""",
+            (channel_slug, today_et_start_utc),
         ).fetchone()
     return row[0] if row else 0
 
