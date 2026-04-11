@@ -105,6 +105,10 @@ class ChannelConfig(BaseModel):
     content_restrictions: ContentRestrictions = ContentRestrictions()
     captioning_mode: str = "word_highlight"   # "static" | "word_highlight" — controls assembler rendering path
     preview_mode: bool = False         # if True, assembled videos hold at 'preview' status instead of auto-queuing
+    pexels_visual_style: str = "legacy"
+    # "legacy"           — current behavior, object-literal queries (default, safe rollback)
+    # "atmospheric"      — scene 0 identifies subject, scenes 1-5 pure mood (abstract subjects: AI, algorithms)
+    # "object_cinematic" — scene 0 identifies object, scenes 1-5 mix object + atmosphere (physical object characters)
 
     @field_validator("tone_variations")
     @classmethod

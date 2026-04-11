@@ -29,6 +29,49 @@ load_dotenv(override=True)
 BASE_DIR = Path(__file__).parent.parent
 CHANNELS_DIR = BASE_DIR / "channels"
 
+# ── Pexels query instruction blocks ──────────────────────────────────────────
+_PEXELS_LEGACY = (
+    "- Write 6 pexels_queries — one per scene. These are LITERAL, CONCRETE stock photo "
+    "search terms for Pexels.com. Think: what physical object or setting would a "
+    "photographer shoot? Include one specific detail: unusual angle, precise "
+    "material/texture, or lighting condition. Good examples: \"corroded power strip "
+    "tangled cables close-up\", \"electrical outlet cracked wall macro\", \"rusted "
+    "filing cabinet drawer ajar dramatic light\". Bad examples: \"power strip\", "
+    "\"dramatic angle\", \"emotional peak\", \"technology device\". No art direction "
+    "words — just what the camera sees, described specifically."
+)
+
+_PEXELS_ATMOSPHERIC = (
+    "- Write 6 pexels_queries — one per scene.\n"
+    "  SCENE 0 (index 0): MUST visually identify the subject. Include its name or the "
+    "physical device it inhabits. Cinematic framing, not plain stock. "
+    "E.g. \"surveillance camera ceiling angle\", \"smart speaker counter dramatic light\", "
+    "\"router blinking dark room\". If the subject is purely abstract (an algorithm, a "
+    "process with no physical form), use its closest physical environment: "
+    "\"server rack blue glow\", \"data center corridor night\".\n"
+    "  SCENES 1-5: Pure atmospheric. NEVER use the subject name. "
+    "Always include one concrete physical noun — no pure mood words. 2-4 words max.\n"
+    "  Good: \"concrete stairwell dusk\", \"rain window blurred city\", "
+    "\"empty corridor fog\", \"hand phone glow night\", \"city aerial night\", "
+    "\"server room blue light\"\n"
+    "  Bad: \"algorithm\", \"AI control\", \"digital surveillance\", \"ominous atmosphere\""
+)
+
+_PEXELS_OBJECT_CINEMATIC = (
+    "- Write 6 pexels_queries — one per scene.\n"
+    "  SCENE 0 (index 0): MUST show the object clearly — this is the character "
+    "introduction. Viewer must know who's talking within 1 second. Cinematic framing, "
+    "not plain stock. E.g. \"dustpan shadow low angle dramatic\", "
+    "\"jacket sleeve doorway morning light\", \"extension cord coiled dark floor\".\n"
+    "  SCENES 1-5: Include the object name in EXACTLY 2 of these 5 queries. "
+    "The other 3 show its environment or context without naming the object. "
+    "Always concrete, always cinematic. 2-4 words max.\n"
+    "  Good (object named): \"dustpan tilted harsh light\", \"jacket hung darkness outline\"\n"
+    "  Good (environment): \"worn linoleum floor close-up\", \"empty hallway morning light\"\n"
+    "  Bad: \"jacket hanging wardrobe\", \"dustpan cleaning\", \"household object moody\""
+)
+
+
 SCRIPT_WRITER_SYSTEM_PROMPT = """You are a script writer for a YouTube Shorts channel. Your only job is to write one short narration script that fits perfectly into the channel's fictional universe.
 
 You will be given:
@@ -99,7 +142,7 @@ If any act exceeds its MAX, rewrite that act before outputting.
 - Each scene prompt must include the visual style suffix provided
 - No text in any image
 - Also write "image_prompt" equal to scene_descriptions[0] (for backwards compatibility)
-- Write 6 pexels_queries — one per scene. These are LITERAL, CONCRETE stock photo search terms for Pexels.com. Think: what physical object or setting would a photographer shoot? Include one specific detail: unusual angle, precise material/texture, or lighting condition. Good examples: "corroded power strip tangled cables close-up", "electrical outlet cracked wall macro", "rusted filing cabinet drawer ajar dramatic light". Bad examples: "power strip", "dramatic angle", "emotional peak", "technology device". No art direction words — just what the camera sees, described specifically.
+__PEXELS_INSTRUCTION_PLACEHOLDER__
 
 ## HASHTAG RULES (SEO — read carefully)
 You will be given a HASHTAG POOL specific to this channel. Pick 4-5 tags from that pool only.
@@ -201,6 +244,18 @@ def generate_script(slug: str, video_id: int) -> dict:
 
     config = ChannelConfig(**json.loads(config_path.read_text()))
 
+    # Select pexels query instruction based on channel visual style
+    _style = config.pexels_visual_style
+    if _style == "atmospheric":
+        _pexels_block = _PEXELS_ATMOSPHERIC
+    elif _style == "object_cinematic":
+        _pexels_block = _PEXELS_OBJECT_CINEMATIC
+    else:
+        _pexels_block = _PEXELS_LEGACY
+    system_prompt = SCRIPT_WRITER_SYSTEM_PROMPT.replace(
+        "__PEXELS_INSTRUCTION_PLACEHOLDER__", _pexels_block
+    )
+
     # Pick an unused subject
     used = set(get_used_subjects(slug))
     available = [s for s in config.subject_bank if s not in used]
@@ -288,7 +343,7 @@ Write the script now. Strong hook, re-hook, sharp final line. Hard word limits p
         response = client.messages.create(
             model=model,
             max_tokens=2048,
-            system=SCRIPT_WRITER_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=conversation,
         )
         raw_text = response.content[0].text
