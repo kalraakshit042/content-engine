@@ -42,6 +42,7 @@ from database.queries import (
     set_youtube_status,
     update_video_youtube,
     count_posted_today,
+    get_affiliate_product,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -183,6 +184,23 @@ def upload_video(slug: str, video_id: int, service, publish_at: datetime = None)
     # Always include #Shorts so YouTube classifies the vertical video correctly
     shorts_tags = ["Shorts"] + [h.lstrip("#") for h in hashtags if h.lstrip("#").lower() != "shorts"]
     description += "\n\n" + " ".join(f"#{t}" for t in shorts_tags)
+
+    # Affiliate link injection — subject-specific Amazon link appended after hashtags
+    import logging as _log
+    affiliate_tag = os.getenv("AMAZON_AFFILIATE_TAG", "")
+    if not affiliate_tag:
+        _log.warning("AMAZON_AFFILIATE_TAG not set — skipping affiliate link injection")
+    else:
+        subject = script_data.get("subject", "").lower().strip()
+        if subject:
+            product = get_affiliate_product(subject)
+            if product:
+                description += (
+                    f"\n\n🔗 https://www.amazon.com/dp/{product['asin']}?tag={affiliate_tag}&ascsubtag=v{video_id}"
+                    "\n\nAs an Amazon Associate I earn from qualifying purchases."
+                )
+            else:
+                _log.warning("No affiliate ASIN for subject '%s' (video %d) — uploading without link", subject, video_id)
 
     if publish_at is not None:
         # YouTube requires RFC 3339 UTC format: 2025-04-06T09:00:00Z
