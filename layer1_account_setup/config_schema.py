@@ -103,6 +103,8 @@ class ChannelConfig(BaseModel):
     description_template: str
     cta: CTA
     content_restrictions: ContentRestrictions = ContentRestrictions()
+    captioning_mode: str = "static"   # "static" | "word_highlight" — controls assembler rendering path
+    preview_mode: bool = False         # if True, assembled videos hold at 'preview' status instead of auto-queuing
 
     @field_validator("tone_variations")
     @classmethod

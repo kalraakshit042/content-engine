@@ -392,6 +392,7 @@ def _render_frame(
     header_text: Optional[str] = None,
     header_accent_words: Optional[list] = None,
     header_font: Optional[ImageFont.FreeTypeFont] = None,
+    captioning_mode: str = "static",
 ) -> bytes:
     """
     Render one video frame as raw RGB bytes.
@@ -497,6 +498,7 @@ def _assemble_with_ffmpeg(
     act_windows: Optional[list] = None,
     header_text: Optional[str] = None,
     header_accent_words: Optional[list] = None,
+    captioning_mode: str = "static",
 ) -> None:
     total_duration = audio_duration + CTA_DURATION
     total_frames = int(total_duration * FPS)
@@ -570,6 +572,7 @@ def _assemble_with_ffmpeg(
             t=t, hook_font=hook_font,
             header_text=header_text, header_accent_words=header_accent_words,
             header_font=header_font,
+            captioning_mode=captioning_mode,
         )
         proc.stdin.write(frame_bytes)
 
@@ -599,6 +602,7 @@ def assemble_video(slug: str, video_id: int) -> Path:
 
     config_path = CHANNELS_DIR / slug / "channel_config.json"
     config = ChannelConfig(**json.loads(config_path.read_text()))
+    captioning_mode = config.captioning_mode  # "static" | "word_highlight" (future)
 
     audio_info = sf.info(str(audio_path))
     audio_duration = audio_info.duration
@@ -641,6 +645,7 @@ def assemble_video(slug: str, video_id: int) -> Path:
         act_windows=act_windows,
         header_text=header_text,
         header_accent_words=header_accent_words,
+        captioning_mode=captioning_mode,
     )
 
     update_video_path(video_id, str(output_path))

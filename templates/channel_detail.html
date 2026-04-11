@@ -340,7 +340,12 @@
               <span class="badge badge-{{ v.status }}" id="status-{{ v.id }}">{{ v.status }}</span>
             </td>
             <td id="youtube-{{ v.id }}">
-              {% if v.youtube_status == 'error' %}
+              {% if v.youtube_status == 'preview' %}
+                <div style="color:var(--accent, #a78bfa); font-weight:600;">⏸ Preview</div>
+                <form method="post" action="/channel/{{ slug }}/video/{{ v.id }}/approve" style="margin-top:4px;">
+                  <button type="submit" style="font-size:11px; padding:2px 8px; cursor:pointer;">Approve for upload</button>
+                </form>
+              {% elif v.youtube_status == 'error' %}
                 <div style="color:var(--red);" title="{{ v.youtube_error or 'YouTube upload failed' }}">Failed</div>
               {% elif v.youtube_status == 'scheduled' %}
                 <div class="text-muted">Queued</div>
@@ -356,7 +361,9 @@
               {% endif %}
             </td>
             <td id="tiktok-{{ v.id }}">
-              {% if v.tiktok_status == 'uploading' %}
+              {% if v.tiktok_status == 'preview' %}
+                <div style="color:var(--accent, #a78bfa);">⏸ Preview</div>
+              {% elif v.tiktok_status == 'uploading' %}
                 <div class="text-muted">Uploading…</div>
               {% elif v.tiktok_status == 'queued' %}
                 <div class="text-muted">Queued</div>

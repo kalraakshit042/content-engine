@@ -361,6 +361,18 @@ def set_tiktok_status(video_id: int, tiktok_status: str, tiktok_error: str = Non
     conn.close()
 
 
+def approve_preview_video(video_id: int) -> None:
+    """Flip a preview video to queued so the next scheduler run picks it up for upload."""
+    with _connect("videos") as conn:
+        conn.execute(
+            """UPDATE videos
+               SET youtube_status = CASE WHEN youtube_status = 'preview' THEN 'queued' ELSE youtube_status END,
+                   tiktok_status  = CASE WHEN tiktok_status  = 'preview' THEN 'queued' ELSE tiktok_status  END
+               WHERE id = ?""",
+            (video_id,),
+        )
+
+
 def get_videos_for_schedule_window(channel_slug: str, start_iso: str, end_iso: str) -> list[dict]:
     with _connect("videos") as conn:
         rows = conn.execute(

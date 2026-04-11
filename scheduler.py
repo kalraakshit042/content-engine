@@ -182,6 +182,16 @@ def existing_slot_map(slug: str, start_iso: str, end_iso: str) -> dict[str, dict
 
 
 def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[bool, str]:
+    import json as _json_gvfs
+
+    # Read channel config for feature flags (preview_mode, captioning_mode)
+    _cfg: dict = {}
+    try:
+        _cfg = _json_gvfs.loads((BASE_DIR / "channels" / slug / "channel_config.json").read_text())
+    except Exception:
+        pass
+    _preview_mode = _cfg.get("preview_mode", False)
+
     video_id = insert_video(slug)
     slot_iso = slot_et.isoformat()
     set_video_scheduled_for(video_id, slot_iso)
@@ -197,9 +207,14 @@ def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[
         set_video_status(video_id, "generating_video")
         assemble_video(slug, video_id)
         set_video_status(video_id, "video_done")
-        set_youtube_status(video_id, "queued", None)
-        set_tiktok_status(video_id, "queued", None)
-        log(run_id, f"[{slug}] video {video_id} ready for {slot_iso}", action="video_ready", channel_slug=slug, video_id=video_id)
+        if _preview_mode:
+            set_youtube_status(video_id, "preview", None)
+            set_tiktok_status(video_id, "preview", None)
+            log(run_id, f"[{slug}] video {video_id} held for preview (preview_mode=true)", action="preview_hold", channel_slug=slug, video_id=video_id)
+        else:
+            set_youtube_status(video_id, "queued", None)
+            set_tiktok_status(video_id, "queued", None)
+            log(run_id, f"[{slug}] video {video_id} ready for {slot_iso}", action="video_ready", channel_slug=slug, video_id=video_id)
         return True, ""
     except Exception as exc:
         set_video_status(video_id, "error")
