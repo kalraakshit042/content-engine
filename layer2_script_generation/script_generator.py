@@ -60,14 +60,18 @@ _PEXELS_ATMOSPHERIC = (
 _PEXELS_OBJECT_CINEMATIC = (
     "- Write 6 pexels_queries — one per scene.\n"
     "  SCENE 0 (index 0): MUST show the object clearly — this is the character "
-    "introduction. Viewer must know who's talking within 1 second. Cinematic framing, "
-    "not plain stock. E.g. \"dustpan shadow low angle dramatic\", "
-    "\"jacket sleeve doorway morning light\", \"extension cord coiled dark floor\".\n"
+    "introduction. Viewer must know who's talking within 1 second. "
+    "HARD RULES for scene 0: (a) the object name MUST appear in the query, "
+    "(b) 2-3 words MAXIMUM, (c) NO mood/lighting words — Pexels cannot search by "
+    "aesthetic and these return wrong images. FORBIDDEN in scene 0: dramatic, shadows, "
+    "noir, cinematic, venetian, blinds, monochrome, silhouette, dark, glow, intimate, "
+    "beam, harsh, dim. Good: \"footstool corner floor\", \"dustpan low angle\", "
+    "\"jacket sleeve doorway\". Bad: \"footstool dramatic shadows venetian blinds\".\n"
     "  SCENES 1-5: Include the object name in EXACTLY 2 of these 5 queries. "
     "The other 3 show its environment or context without naming the object. "
-    "Always concrete, always cinematic. 2-4 words max.\n"
-    "  Good (object named): \"dustpan tilted harsh light\", \"jacket hung darkness outline\"\n"
-    "  Good (environment): \"worn linoleum floor close-up\", \"empty hallway morning light\"\n"
+    "Always concrete. 2-4 words max. No mood/lighting words.\n"
+    "  Good (object named): \"dustpan tilted floor\", \"jacket hung hallway\"\n"
+    "  Good (environment): \"worn linoleum floor\", \"empty hallway morning\"\n"
     "  Bad: \"jacket hanging wardrobe\", \"dustpan cleaning\", \"household object moody\""
 )
 
@@ -374,6 +378,18 @@ Write the script now. Strong hook, re-hook, sharp final line. Hard word limits p
             max(0, len(act.split()) - max_w)
             for act, max_w in zip(acts, ACT_MAX_WORDS)
         )
+
+        # For object_cinematic style: verify scene 0 pexels_query contains the subject.
+        # If it doesn't, the opening image won't show the object — treat as a violation.
+        if _style == "object_cinematic":
+            pexels_q = data.get("pexels_queries", [])
+            scene0_query = pexels_q[0].lower() if pexels_q else ""
+            if subject.lower() not in scene0_query:
+                violations.append(
+                    f"pexels_queries[0] ('{pexels_q[0] if pexels_q else ''}') does not "
+                    f"contain the subject '{subject}' — scene 0 MUST name the object"
+                )
+
         attempts.append((data, total_overage))
 
         if not violations:
@@ -387,9 +403,11 @@ Write the script now. Strong hook, re-hook, sharp final line. Hard word limits p
             conversation.append({
                 "role": "user",
                 "content": (
-                    f"Word count violations: {violation_str}. "
-                    f"Rewrite the script. Each act MUST stay within its MAX word limit. "
-                    f"Cut Act 2 ruthlessly — 30 words maximum. Count every word before outputting."
+                    f"Violations: {violation_str}. "
+                    f"Fix all violations. Word counts: each act MUST stay within its MAX "
+                    f"(Act 1: 12w, Act 2: 30w, Act 3: 25w, Act 4: 25w). "
+                    f"For pexels_queries[0]: it MUST contain '{subject}' and be 2-3 words "
+                    f"with no mood/lighting words. Count every word before outputting."
                 ),
             })
 
