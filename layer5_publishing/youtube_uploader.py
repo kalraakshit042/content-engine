@@ -17,7 +17,9 @@ Comments are posted unpinned; pin manually in YouTube Studio after upload.
 from __future__ import annotations
 
 import json
+import os
 import random
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -196,7 +198,7 @@ def upload_video(slug: str, video_id: int, service, publish_at: datetime = None)
             product = get_affiliate_product(subject)
             if product:
                 description += (
-                    f"\n\n🔗 https://www.amazon.com/dp/{product['asin']}?tag={affiliate_tag}&ascsubtag=v{video_id}"
+                    f"\n\n🔗 https://www.amazon.com/dp/{product['asin']}/?tag={affiliate_tag}"
                     "\n\nAs an Amazon Associate I earn from qualifying purchases."
                 )
             else:
@@ -236,7 +238,7 @@ def upload_video(slug: str, video_id: int, service, publish_at: datetime = None)
 
     response = None
     retries = 0
-    max_retries = 3
+    max_retries = 5
     while response is None:
         try:
             _, response = request.next_chunk()
@@ -244,7 +246,15 @@ def upload_video(slug: str, video_id: int, service, publish_at: datetime = None)
             if e.resp.status in (500, 502, 503, 504) and retries < max_retries:
                 retries += 1
                 wait = 2 ** retries
-                print(f"  upload: transient error {e.resp.status}, retry {retries} in {wait}s...")
+                print(f"  upload: transient HTTP error {e.resp.status}, retry {retries}/{max_retries} in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+        except (socket.timeout, TimeoutError, ConnectionResetError) as e:
+            if retries < max_retries:
+                retries += 1
+                wait = 2 ** retries
+                print(f"  upload: network timeout ({type(e).__name__}), retry {retries}/{max_retries} in {wait}s...")
                 time.sleep(wait)
             else:
                 raise
@@ -274,6 +284,38 @@ def upload_thumbnail(yt_video_id: str, thumbnail_path: Path, service) -> None:
         print(f"  thumbnail: set")
     except HttpError as e:
         print(f"  thumbnail: failed ({e.resp.status}) — set manually in YouTube Studio")
+
+
+def _build_comment(base_comment: str, video_id: int) -> str:
+    """
+    Append affiliate link to a pinned comment if the video's subject has an ASIN.
+    YouTube Shorts descriptions aren't clickable, so the comment is the only live link.
+    """
+    affiliate_tag = os.getenv("AMAZON_AFFILIATE_TAG", "")
+    if not affiliate_tag:
+        return base_comment
+    try:
+        from database.queries import _connect
+        with _connect("videos") as _conn:
+            row = _conn.execute("SELECT channel_slug FROM videos WHERE id=?", (video_id,)).fetchone()
+        if not row:
+            return base_comment
+        slug = row["channel_slug"]
+        sp = resolve_script_json_path(slug, video_id)
+        if not sp.exists():
+            return base_comment
+        import json as _j
+        data = _j.loads(sp.read_text())
+        subject = data.get("subject", "").lower().strip()
+        if not subject:
+            return base_comment
+        product = get_affiliate_product(subject)
+        if not product:
+            return base_comment
+        link = f"https://www.amazon.com/dp/{product['asin']}/?tag={affiliate_tag}"
+        return f"{base_comment}\n\n🔗 {link}\n(As an Amazon Associate I earn from qualifying purchases.)"
+    except Exception:
+        return base_comment
 
 
 def post_comment(yt_video_id: str, comment_text: str, service) -> None:
@@ -329,7 +371,7 @@ def refresh_channel_stats(slug: str) -> dict:
             if now < slot_utc:
                 continue  # not published yet
         # Either no scheduled_for (already public) or past publish time — post comment
-        comment = random.choice(config.cta.pinned_comment_templates)
+        comment = _build_comment(random.choice(config.cta.pinned_comment_templates), v["id"])
         try:
             post_comment(v["youtube_video_id"], comment, service)
             mark_comment_posted(v["id"])
@@ -375,7 +417,7 @@ def publish_video(slug: str, video_id: int, slot: datetime = None) -> str:
         print(f"[{slug}] No thumbnail found, skipping")
 
     config = _load_channel_config(slug)
-    comment = random.choice(config.cta.pinned_comment_templates)
+    comment = _build_comment(random.choice(config.cta.pinned_comment_templates), video_id)
     print(f"[{slug}] Posting comment...")
     try:
         post_comment(yt_video_id, comment, service)
@@ -405,7 +447,7 @@ def publish_video_now(slug: str, video_id: int) -> str:
         upload_thumbnail(yt_video_id, thumbnail_path, service)
 
     config = _load_channel_config(slug)
-    comment = random.choice(config.cta.pinned_comment_templates)
+    comment = _build_comment(random.choice(config.cta.pinned_comment_templates), video_id)
     print(f"[{slug}] Posting comment...")
     try:
         post_comment(yt_video_id, comment, service)
