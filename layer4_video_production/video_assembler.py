@@ -567,8 +567,9 @@ def _assemble_with_ffmpeg(
             "-map", "0:v", "-map", "[aout]",
             "-t", str(total_duration),
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(output_path),
         ]
     else:
@@ -581,8 +582,9 @@ def _assemble_with_ffmpeg(
             "-map", "0:v", "-map", "1:a",
             "-t", str(total_duration),
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(output_path),
         ]
 
