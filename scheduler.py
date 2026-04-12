@@ -6,9 +6,15 @@ scheduler.py
 Hourly orchestration job for the content engine.
 
 Responsibilities:
-1. Publish any due queued videos to YouTube and TikTok.
-2. Ensure each live channel generates at most 1 video per cron tick when a
-   posting slot has arrived.
+1. After 6AM ET: generate all of today's videos at once, then immediately upload
+   each to YouTube as a SCHEDULED post (never "Post now"). YouTube delivers at the
+   designated time — the engine does not push live at runtime.
+2. Posting cadence: 1 video/day in week 1, 2 videos/day after that.
+   Slots are seeded-random per channel+date — deterministic across restarts.
+   1 video: random 8AM-5PM ET. 2 videos: first 8-11AM ET, second 2-5PM ET.
+3. Missed cron (laptop off): if a slot's time has already passed, the video is
+   still generated and uploaded with publish_at = now+15min.
+4. TikTok: queued after generation, picked up by publish_due_tiktok_videos().
 
 Recommended cron:
   0 * * * * cd /Users/akshitkalra/Code/Content\ automation/content-engine && \
@@ -35,6 +41,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from database.setup import setup_channels_db, setup_videos_db, setup_costs_db, setup_ops_db
 from database.queries import (
+    count_generated_today,
     count_posted_today,
     count_tiktok_posted_today,
     create_cron_run,
@@ -55,6 +62,7 @@ from layer4_video_production.video_assembler import assemble_video
 from layer5_publishing.tiktok_uploader import publish_due_queued_videos as publish_due_tiktok_videos
 from layer5_publishing.youtube_uploader import (
     ET,
+    publish_video as yt_publish_video,
     publish_due_queued_videos as publish_due_youtube_videos,
 )
 
@@ -169,16 +177,25 @@ def log_publish_details(run_id: int, platform: str, result: dict) -> None:
         )
 
 
-def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[bool, str]:
+def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime, publish_slot: datetime = None) -> tuple[bool, str]:
+    """
+    Generate a complete video then immediately upload it to YouTube as a scheduled post.
+
+    slot_et:      the logical posting slot (stored in scheduled_for, drives the seeded random)
+    publish_slot: the actual YouTube publish time — equals slot_et unless the slot already
+                  passed (missed cron), in which case the caller sets it to now+15min.
+    """
     import json as _json_gvfs
 
-    # Read channel config for feature flags (preview_mode, captioning_mode)
     _cfg: dict = {}
     try:
         _cfg = _json_gvfs.loads((BASE_DIR / "channels" / slug / "channel_config.json").read_text())
     except Exception:
         pass
     _preview_mode = _cfg.get("preview_mode", False)
+
+    if publish_slot is None:
+        publish_slot = slot_et
 
     video_id = insert_video(slug)
     slot_iso = slot_et.isoformat()
@@ -195,14 +212,31 @@ def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[
         set_video_status(video_id, "generating_video")
         assemble_video(slug, video_id)
         set_video_status(video_id, "video_done")
+
         if _preview_mode:
             set_youtube_status(video_id, "preview", None)
             set_tiktok_status(video_id, "preview", None)
             log(run_id, f"[{slug}] video {video_id} held for preview (preview_mode=true)", action="preview_hold", channel_slug=slug, video_id=video_id)
         else:
-            set_youtube_status(video_id, "queued", None)
+            # Upload immediately to YouTube as a scheduled post.
+            # YouTube handles delivery at publish_slot — we never post as "public now".
+            et_str = publish_slot.astimezone(ET).strftime("%b %-d %I:%M %p ET")
+            log(run_id, f"[{slug}] uploading video {video_id} — scheduled for {et_str}",
+                action="yt_upload_start", channel_slug=slug, video_id=video_id)
+            try:
+                yt_publish_video(slug, video_id, slot=publish_slot)
+                set_youtube_status(video_id, "scheduled", None)
+                log(run_id, f"[{slug}] video {video_id} uploaded and scheduled for {et_str}",
+                    action="yt_scheduled", channel_slug=slug, video_id=video_id)
+            except Exception as yt_exc:
+                set_youtube_status(video_id, "error", str(yt_exc)[:500])
+                log(run_id, f"[{slug}] video {video_id} YT upload failed: {yt_exc}",
+                    level="error", action="yt_upload_failed", channel_slug=slug, video_id=video_id)
+                return False, str(yt_exc)
+
+            # TikTok still goes through the normal queued → publish flow
             set_tiktok_status(video_id, "queued", None)
-            log(run_id, f"[{slug}] video {video_id} ready for {slot_iso}", action="video_ready", channel_slug=slug, video_id=video_id)
+
         return True, ""
     except Exception as exc:
         set_video_status(video_id, "error")
@@ -216,11 +250,10 @@ def _videos_per_day(channel_created_at: str | None) -> int:
     """
     Return target videos/day based on how many days since channel went live.
 
-    Week 1 (days 0-6):   1 video/day — establish cadence
-    Weeks 2-3 (days 7-27): 2 videos/day — build momentum
-    Week 4+ (day 28+):   3 videos/day — sustained growth
+    Week 1 (days 0-6):  1 video/day — establish cadence, single 8AM-5PM ET window
+    Week 2+ (days 7+):  2 videos/day — first 8-11AM ET, second 2-5PM ET
 
-    High-velocity (5/day) is triggered separately via high_velocity_mode in channel config.
+    high_velocity_mode=true in channel_config.json overrides to 5/day (8AM-8PM spread).
     """
     if not channel_created_at:
         return 1
@@ -231,30 +264,37 @@ def _videos_per_day(channel_created_at: str | None) -> int:
     except (ValueError, TypeError):
         return 1
 
-    if days_live < 7:
-        return 1
-    elif days_live < 28:
-        return 2
-    else:
-        return 3
+    return 1 if days_live < 7 else 2
 
 
 def _random_daily_slots(slug: str, day, n: int) -> list[tuple[int, int]]:
     """
-    Generate n posting times between 10 AM and 8 PM ET for a given day.
-    Seeded by slug + date — consistent across scheduler runs, unique per day/channel.
-    Times are spread evenly across the window to avoid clustering.
+    Generate n posting times seeded by slug+date — deterministic per channel/day.
+
+    n=1: single slot anywhere between 8AM and 5PM ET
+    n=2: first slot 8-11AM ET, second slot 2-5PM ET (no midday overlap)
+    n>2: spread evenly across 8AM-8PM ET (high_velocity_mode only)
     """
     import random as _rng_mod
     rng = _rng_mod.Random(f"{slug}-{day.isoformat()}")
-    window_start = 10 * 60   # 600 minutes = 10:00 AM
-    window_end = 20 * 60     # 1200 minutes = 8:00 PM
+
+    if n == 1:
+        slot_min = rng.randint(8 * 60, 17 * 60 - 1)   # 8:00AM–4:59PM
+        return [(slot_min // 60, slot_min % 60)]
+
+    if n == 2:
+        first_min  = rng.randint(8 * 60, 11 * 60 - 1)  # 8:00AM–10:59AM
+        second_min = rng.randint(14 * 60, 17 * 60 - 1) # 2:00PM–4:59PM
+        return [(first_min // 60, first_min % 60), (second_min // 60, second_min % 60)]
+
+    # high_velocity_mode (n>2): evenly spread 8AM-8PM
+    window_start, window_end = 8 * 60, 20 * 60
     segment = (window_end - window_start) // n
     slots = []
     for i in range(n):
         seg_start = window_start + i * segment
-        seg_end = seg_start + segment
-        minutes = rng.randint(seg_start, seg_end - 1)
+        seg_end   = seg_start + segment
+        minutes   = rng.randint(seg_start, seg_end - 1)
         slots.append((minutes // 60, minutes % 60))
     return sorted(slots)
 
@@ -311,10 +351,11 @@ def _slots_for_channel(slug: str, now_et: datetime, horizon_days: int) -> list[d
     return sorted(slots)
 
 
-def _slots_for_today(slug: str, today, now_et: datetime) -> list[datetime]:
+def _slots_for_today(slug: str, today) -> list[datetime]:
     """
-    Returns posting slots for today that have already passed (i.e. are due).
-    Uses the same seeded-random or fixed-slot logic as _slots_for_channel.
+    Returns ALL posting slots for today (past and future) for a given channel.
+    Seeded-random or fixed — same logic as _random_daily_slots.
+    The caller decides which slots are actionable based on current time.
     """
     import json as _json
 
@@ -334,48 +375,70 @@ def _slots_for_today(slug: str, today, now_et: datetime) -> list[datetime]:
             n = 5
         slot_times = _random_daily_slots(slug, today, n)
 
-    slots = []
-    for hour, minute in slot_times:
-        slot_et = datetime(today.year, today.month, today.day, hour, minute, tzinfo=ET)
-        if slot_et <= now_et:
-            slots.append(slot_et)
-    return sorted(slots)
+    return sorted([
+        datetime(today.year, today.month, today.day, hour, minute, tzinfo=ET)
+        for hour, minute in slot_times
+    ])
 
 
 def generate_due_videos(run_id: int) -> dict[str, int]:
     """
-    At-runtime video generation: generates and queues videos only when their
-    posting slot has arrived. No pre-caching, no pre-generation.
+    Daily video generation — runs after 6AM ET, generates all of today's videos at once.
 
-    For each channel:
-      - Count how many of today's slots have passed (slots_due)
-      - Count how many videos have already been posted/queued today (already_handled)
-      - Generate (slots_due - already_handled) videos now, one per missing slot
-    The freshly-queued videos are then picked up by publish_due_*_videos() in the
-    same cron tick.
+    Workflow per channel:
+      1. Gate: only run from 6AM ET onwards (no midnight generation).
+      2. Determine today's slots (seeded random: 1 video in week 1, 2 after).
+      3. Count non-error video rows already created today (count_generated_today).
+         This covers any status — generating, queued, scheduled, published.
+         Error rows are excluded so failed attempts can be retried.
+      4. Generate the remaining (slots - already_generated) videos.
+      5. Each video is uploaded immediately to YouTube as a SCHEDULED post
+         (never "Post now"). If the slot time is already past (missed cron), the
+         publish time is bumped to now+15min so YouTube accepts it.
+
+    The cron may run this multiple times per day — idempotent by design.
     """
     generated = 0
     failed = 0
     now_et = datetime.now(ET)
     today = now_et.date()
 
+    # Gate: no generation before 6AM ET (avoid midnight surprises)
+    if now_et.hour < 6:
+        log(run_id, "Before 6AM ET — daily generation paused until 6AM", action="generate_skip_early")
+        return {"generated": 0, "failed": 0}
+
     for channel in get_live_channels():
         slug = channel["slug"]
-        due_slots = _slots_for_today(slug, today, now_et)
-        if not due_slots:
+        all_slots = _slots_for_today(slug, today)
+        if not all_slots:
             continue
 
-        already_posted = count_posted_today(slug)
-        to_generate = min(1, max(0, len(due_slots) - already_posted))
+        already_generated = count_generated_today(slug)
+        to_generate = max(0, len(all_slots) - already_generated)
         if to_generate == 0:
+            log(run_id, f"[{slug}] {len(all_slots)} slot(s) today — all {already_generated} already handled",
+                action="generate_skip", channel_slug=slug)
             continue
 
-        log(run_id, f"[{slug}] {len(due_slots)} slot(s) due, {already_posted} posted, generating {to_generate}",
+        log(run_id,
+            f"[{slug}] {len(all_slots)} slot(s) today, {already_generated} already generated, "
+            f"generating {to_generate} now",
             action="generate_due", channel_slug=slug)
 
         for i in range(to_generate):
-            slot_et = due_slots[already_posted + i]
-            ok, _ = generate_video_for_slot(run_id, slug, slot_et)
+            slot_et = all_slots[already_generated + i]
+            # If slot is already past (missed cron tick), bump publish time to now+15min
+            if slot_et <= now_et:
+                publish_slot = now_et + timedelta(minutes=15)
+                log(run_id,
+                    f"[{slug}] slot {slot_et.strftime('%H:%M')} ET already passed — "
+                    f"rescheduling to now+15min ({publish_slot.strftime('%H:%M')} ET)",
+                    action="slot_bumped", channel_slug=slug)
+            else:
+                publish_slot = slot_et
+
+            ok, _ = generate_video_for_slot(run_id, slug, slot_et, publish_slot=publish_slot)
             if ok:
                 generated += 1
             else:

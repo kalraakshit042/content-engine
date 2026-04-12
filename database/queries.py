@@ -224,6 +224,30 @@ def get_published_videos(channel_slug: str) -> list:
     return [dict(r) for r in rows]
 
 
+def count_generated_today(channel_slug: str) -> int:
+    """
+    Count non-error video rows created today for this channel (ET midnight).
+    Used by the scheduler to know how many slots have already been claimed today,
+    so it doesn't double-generate on repeat cron ticks.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+    _UTC = ZoneInfo("UTC")
+    now_et = datetime.now(_ET)
+    today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
+    with _connect("videos") as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM videos
+               WHERE channel_slug = ?
+               AND status != 'error'
+               AND created_at >= ?""",
+            (channel_slug, today_et_start_utc),
+        ).fetchone()
+    return row[0] if row else 0
+
+
 def count_posted_today(channel_slug: str) -> int:
     """Count videos posted to YouTube since midnight ET today."""
     from datetime import datetime
