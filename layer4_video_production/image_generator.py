@@ -66,6 +66,19 @@ def _extract_keywords(scene_description: str, max_words: int = 4) -> str:
     return query or scene_description.split(",")[0][:50]
 
 
+def _clean_pexels_query(query: str) -> str:
+    """
+    Strip art-direction jargon that LLMs leak into pexels_queries despite instructions.
+    Pexels is a stock photo site — it searches by literal subject matter, not by mood
+    or aesthetic. Words like 'noir', 'dramatic', 'venetian', 'monochrome' cause Pexels
+    to return mood/room photos instead of the intended subject.
+    Falls back to original query if stripping removes everything.
+    """
+    words = re.sub(r"[^\w\s]", " ", query.lower()).split()
+    kept = [w for w in words if w not in _STRIP_WORDS and len(w) > 2]
+    return " ".join(kept) if kept else query
+
+
 def _fetch_pixabay(query: str, api_key: str, out_path: Path) -> bool:
     """
     Fallback image source. Pixabay free tier: 100 req/hour.
@@ -233,7 +246,7 @@ def generate_scene_images(
             continue
 
         if pexels_queries and i < len(pexels_queries) and pexels_queries[i].strip():
-            query = pexels_queries[i].strip()
+            query = _clean_pexels_query(pexels_queries[i])
         else:
             query = _extract_keywords(description)
         print(f"  scene {i}: fetching '{query}' from Pexels...")

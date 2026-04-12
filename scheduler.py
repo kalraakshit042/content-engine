@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 scheduler.py
 
@@ -6,8 +7,8 @@ Hourly orchestration job for the content engine.
 
 Responsibilities:
 1. Publish any due queued videos to YouTube and TikTok.
-2. Ensure each live channel has generated videos covering the next 2 days of
-   planned posting slots.
+2. Ensure each live channel generates at most 1 video per cron tick when a
+   posting slot has arrived.
 
 Recommended cron:
   0 * * * * cd /Users/akshitkalra/Code/Content\ automation/content-engine && \
@@ -34,12 +35,13 @@ sys.path.insert(0, str(BASE_DIR))
 
 from database.setup import setup_channels_db, setup_videos_db, setup_costs_db, setup_ops_db
 from database.queries import (
+    count_posted_today,
+    count_tiktok_posted_today,
     create_cron_run,
     finish_cron_run,
-    get_channel_videos,
     get_channel,
+    get_channel_videos,
     get_live_channels,
-    get_videos_for_schedule_window,
     insert_video,
     log_cron_event,
     set_tiktok_status,
@@ -57,8 +59,6 @@ from layer5_publishing.youtube_uploader import (
 )
 
 LOG_DIR = BASE_DIR / "logs"
-HORIZON_DAYS = 2
-MAX_GENERATE_PER_CHANNEL = 1
 FAILURE_EMAIL_TO = "akskalra@wharton.upenn.edu"
 MISSED_WINDOW_GRACE_MINUTES = 65
 
@@ -169,19 +169,17 @@ def log_publish_details(run_id: int, platform: str, result: dict) -> None:
         )
 
 
-def existing_slot_map(slug: str, start_iso: str, end_iso: str) -> dict[str, dict]:
-    videos = get_videos_for_schedule_window(slug, start_iso, end_iso)
-    result: dict[str, dict] = {}
-    for video in videos:
-        if video.get("status") == "error":
-            continue
-        slot = video.get("scheduled_for")
-        if slot and slot not in result:
-            result[slot] = video
-    return result
-
-
 def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[bool, str]:
+    import json as _json_gvfs
+
+    # Read channel config for feature flags (preview_mode, captioning_mode)
+    _cfg: dict = {}
+    try:
+        _cfg = _json_gvfs.loads((BASE_DIR / "channels" / slug / "channel_config.json").read_text())
+    except Exception:
+        pass
+    _preview_mode = _cfg.get("preview_mode", False)
+
     video_id = insert_video(slug)
     slot_iso = slot_et.isoformat()
     set_video_scheduled_for(video_id, slot_iso)
@@ -197,9 +195,14 @@ def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime) -> tuple[
         set_video_status(video_id, "generating_video")
         assemble_video(slug, video_id)
         set_video_status(video_id, "video_done")
-        set_youtube_status(video_id, "queued", None)
-        set_tiktok_status(video_id, "queued", None)
-        log(run_id, f"[{slug}] video {video_id} ready for {slot_iso}", action="video_ready", channel_slug=slug, video_id=video_id)
+        if _preview_mode:
+            set_youtube_status(video_id, "preview", None)
+            set_tiktok_status(video_id, "preview", None)
+            log(run_id, f"[{slug}] video {video_id} held for preview (preview_mode=true)", action="preview_hold", channel_slug=slug, video_id=video_id)
+        else:
+            set_youtube_status(video_id, "queued", None)
+            set_tiktok_status(video_id, "queued", None)
+            log(run_id, f"[{slug}] video {video_id} ready for {slot_iso}", action="video_ready", channel_slug=slug, video_id=video_id)
         return True, ""
     except Exception as exc:
         set_video_status(video_id, "error")
@@ -308,38 +311,77 @@ def _slots_for_channel(slug: str, now_et: datetime, horizon_days: int) -> list[d
     return sorted(slots)
 
 
-def ensure_future_coverage(run_id: int, horizon_days: int = HORIZON_DAYS) -> dict[str, int]:
-    generated = 0
-    skipped = 0
-    failed = 0
+def _slots_for_today(slug: str, today, now_et: datetime) -> list[datetime]:
+    """
+    Returns posting slots for today that have already passed (i.e. are due).
+    Uses the same seeded-random or fixed-slot logic as _slots_for_channel.
+    """
+    import json as _json
 
+    config_data: dict = {}
+    try:
+        config_data = _json.loads((BASE_DIR / "channels" / slug / "channel_config.json").read_text())
+    except Exception:
+        pass
+
+    raw_fixed = config_data.get("publish_slots", [])
+    if raw_fixed:
+        slot_times = [tuple(map(int, s.split(":"))) for s in raw_fixed]
+    else:
+        channel = get_channel(slug)
+        n = _videos_per_day(channel.get("created_at") if channel else None)
+        if config_data.get("high_velocity_mode"):
+            n = 5
+        slot_times = _random_daily_slots(slug, today, n)
+
+    slots = []
+    for hour, minute in slot_times:
+        slot_et = datetime(today.year, today.month, today.day, hour, minute, tzinfo=ET)
+        if slot_et <= now_et:
+            slots.append(slot_et)
+    return sorted(slots)
+
+
+def generate_due_videos(run_id: int) -> dict[str, int]:
+    """
+    At-runtime video generation: generates and queues videos only when their
+    posting slot has arrived. No pre-caching, no pre-generation.
+
+    For each channel:
+      - Count how many of today's slots have passed (slots_due)
+      - Count how many videos have already been posted/queued today (already_handled)
+      - Generate (slots_due - already_handled) videos now, one per missing slot
+    The freshly-queued videos are then picked up by publish_due_*_videos() in the
+    same cron tick.
+    """
+    generated = 0
+    failed = 0
     now_et = datetime.now(ET)
+    today = now_et.date()
 
     for channel in get_live_channels():
         slug = channel["slug"]
-        slots = _slots_for_channel(slug, now_et, horizon_days)
-        if not slots:
+        due_slots = _slots_for_today(slug, today, now_et)
+        if not due_slots:
             continue
-        start_iso = slots[0].isoformat()
-        end_iso = slots[-1].isoformat()
-        existing = existing_slot_map(slug, start_iso, end_iso)
-        channel_generated = 0
-        for slot_et in slots:
-            slot_iso = slot_et.isoformat()
-            if slot_iso in existing:
-                skipped += 1
-                continue
-            if channel_generated >= MAX_GENERATE_PER_CHANNEL:
-                skipped += 1
-                continue
+
+        already_posted = count_posted_today(slug)
+        to_generate = min(1, max(0, len(due_slots) - already_posted))
+        if to_generate == 0:
+            continue
+
+        log(run_id, f"[{slug}] {len(due_slots)} slot(s) due, {already_posted} posted, generating {to_generate}",
+            action="generate_due", channel_slug=slug)
+
+        for i in range(to_generate):
+            slot_et = due_slots[already_posted + i]
             ok, _ = generate_video_for_slot(run_id, slug, slot_et)
             if ok:
                 generated += 1
-                channel_generated += 1
             else:
                 failed += 1
 
-    return {"generated": generated, "skipped": skipped, "failed": failed}
+    return {"generated": generated, "failed": failed}
 
 
 def run_hourly_job(triggered_by: str = "cron") -> int:
@@ -362,6 +404,12 @@ def run_hourly_job(triggered_by: str = "cron") -> int:
         for alert in alerts:
             log(run_id, alert, level="error", action="runtime_alert")
 
+        # Generate videos whose posting slot has arrived — before publish so they
+        # are picked up in the same cron tick.
+        gen_result = generate_due_videos(run_id)
+        log(run_id, f"Due video generation result: {gen_result}", action="generate_due")
+        summary_parts.append(f"Generated {gen_result['generated']}")
+
         yt_result = publish_due_youtube_videos()
         log(run_id, f"YouTube due publish result: {yt_result}", action="youtube_due_publish")
         log_publish_details(run_id, "YouTube", yt_result)
@@ -376,11 +424,7 @@ def run_hourly_job(triggered_by: str = "cron") -> int:
         for line in cleanup_log:
             log(run_id, f"[cleanup] {line}", action="storage_cleanup")
 
-        coverage_result = ensure_future_coverage(run_id, horizon_days=HORIZON_DAYS)
-        log(run_id, f"Future coverage result: {coverage_result}", action="ensure_coverage")
-        summary_parts.append(f"Generated {coverage_result['generated']}")
-
-        status = "success" if coverage_result["failed"] == 0 and yt_result["failed"] == 0 and tt_result["failed"] == 0 and not alerts else "partial"
+        status = "success" if gen_result["failed"] == 0 and yt_result["failed"] == 0 and tt_result["failed"] == 0 and not alerts else "partial"
         finish_cron_run(run_id, status=status, summary=" | ".join(summary_parts))
         log(run_id, f"Hourly orchestrator finished with status={status}", action="finish")
         if status != "success":

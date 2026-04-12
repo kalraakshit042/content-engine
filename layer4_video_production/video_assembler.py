@@ -217,10 +217,10 @@ def _generate_captions(script_text: str, audio_duration: float, acts_path: Optio
     return all_captions
 
 
-def _caption_at(captions: list, t: float) -> Optional[str]:
+def _caption_at(captions: list, t: float) -> Optional[dict]:
     for cap in captions:
         if cap["start"] <= t < cap["end"]:
-            return cap["text"]
+            return cap
     return None
 
 
@@ -284,6 +284,24 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list:
     if current:
         lines.append(current)
     return lines
+
+
+def _active_word_index(words: list, cap_start: float, cap_end: float, t: float) -> int:
+    """
+    Estimate which word index is being spoken at time t using character proportions.
+    Assumes speech time is distributed proportionally to each word's character count.
+    """
+    total_chars = sum(len(w) for w in words)
+    if total_chars == 0:
+        return 0
+    progress = min(max(t - cap_start, 0.0) / max(cap_end - cap_start, 0.001), 0.999)
+    target = int(progress * total_chars)
+    cumulative = 0
+    for i, word in enumerate(words):
+        cumulative += len(word)
+        if cumulative > target:
+            return i
+    return len(words) - 1
 
 
 def _render_header(
@@ -392,11 +410,16 @@ def _render_frame(
     header_text: Optional[str] = None,
     header_accent_words: Optional[list] = None,
     header_font: Optional[ImageFont.FreeTypeFont] = None,
+    captioning_mode: str = "static",
+    cap_start: float = 0.0,
+    cap_end: float = 0.0,
 ) -> bytes:
     """
     Render one video frame as raw RGB bytes.
     Applies per-scene Ken Burns and composites caption/CTA text with pill background.
     For t < 3.0s, uses hook_font (larger) and higher y position for visual punch.
+    captioning_mode="word_highlight": the currently-spoken word renders in yellow,
+    others in white, estimated via character-proportion timing.
     """
     motion = SCENE_MOTIONS[scene_idx % len(SCENE_MOTIONS)]
     base_img = scene_imgs[scene_idx]
@@ -418,8 +441,8 @@ def _render_frame(
         draw_overlay = ImageDraw.Draw(overlay)
         padding = 14
 
-        y = y_start
         dummy_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        y = y_start
         for line in lines:
             bbox = dummy_draw.textbbox((0, 0), line, font=active_font)
             tw = bbox[2] - bbox[0]
@@ -433,15 +456,37 @@ def _render_frame(
         frame_rgba = Image.alpha_composite(frame_rgba, overlay)
         frame = frame_rgba.convert("RGB")
 
-        # Draw text on composited frame
         draw = ImageDraw.Draw(frame)
         y = y_start
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=active_font)
-            tw = bbox[2] - bbox[0]
-            x = (VIDEO_W - tw) // 2
-            _draw_outlined_text(draw, (x, y), line, active_font)
-            y += line_height
+
+        if captioning_mode == "word_highlight" and cap_start < cap_end:
+            # Render word-by-word: active word in yellow, others in white
+            all_words = caption.split()
+            active_idx = _active_word_index(all_words, cap_start, cap_end, t)
+            space_w = dummy_draw.textbbox((0, 0), " ", font=active_font)[2]
+            word_cursor = 0
+            for line in lines:
+                line_words = line.split()
+                line_word_widths = [
+                    dummy_draw.textbbox((0, 0), w, font=active_font)[2]
+                    for w in line_words
+                ]
+                total_line_w = sum(line_word_widths) + space_w * max(len(line_words) - 1, 0)
+                x = (VIDEO_W - total_line_w) // 2
+                for i, (word, ww) in enumerate(zip(line_words, line_word_widths)):
+                    color = (255, 220, 0) if word_cursor + i == active_idx else (255, 255, 255)
+                    _draw_outlined_text(draw, (x, y), word, active_font, color=color)
+                    x += ww + space_w
+                word_cursor += len(line_words)
+                y += line_height
+        else:
+            # Static mode: all words same color
+            for line in lines:
+                bbox = draw.textbbox((0, 0), line, font=active_font)
+                tw = bbox[2] - bbox[0]
+                x = (VIDEO_W - tw) // 2
+                _draw_outlined_text(draw, (x, y), line, active_font)
+                y += line_height
 
     if show_cta:
         cta_lines = _wrap_text(cta_text, cta_font, VIDEO_W - 120)
@@ -497,6 +542,7 @@ def _assemble_with_ffmpeg(
     act_windows: Optional[list] = None,
     header_text: Optional[str] = None,
     header_accent_words: Optional[list] = None,
+    captioning_mode: str = "static",
 ) -> None:
     total_duration = audio_duration + CTA_DURATION
     total_frames = int(total_duration * FPS)
@@ -521,8 +567,9 @@ def _assemble_with_ffmpeg(
             "-map", "0:v", "-map", "[aout]",
             "-t", str(total_duration),
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(output_path),
         ]
     else:
@@ -535,8 +582,9 @@ def _assemble_with_ffmpeg(
             "-map", "0:v", "-map", "1:a",
             "-t", str(total_duration),
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(output_path),
         ]
 
@@ -561,7 +609,10 @@ def _assemble_with_ffmpeg(
             scene_start = cycle_idx * SCENE_CYCLE_SECONDS
             scene_progress = min((t - scene_start) / SCENE_CYCLE_SECONDS, 1.0)
 
-        caption = _caption_at(captions, t)
+        cap_entry = _caption_at(captions, t)
+        caption = cap_entry["text"] if cap_entry else None
+        cap_start = cap_entry["start"] if cap_entry else 0.0
+        cap_end = cap_entry["end"] if cap_entry else 0.0
         show_cta = t >= audio_duration
 
         frame_bytes = _render_frame(
@@ -570,6 +621,9 @@ def _assemble_with_ffmpeg(
             t=t, hook_font=hook_font,
             header_text=header_text, header_accent_words=header_accent_words,
             header_font=header_font,
+            captioning_mode=captioning_mode,
+            cap_start=cap_start,
+            cap_end=cap_end,
         )
         proc.stdin.write(frame_bytes)
 
@@ -599,6 +653,7 @@ def assemble_video(slug: str, video_id: int) -> Path:
 
     config_path = CHANNELS_DIR / slug / "channel_config.json"
     config = ChannelConfig(**json.loads(config_path.read_text()))
+    captioning_mode = config.captioning_mode  # "static" | "word_highlight" (future)
 
     audio_info = sf.info(str(audio_path))
     audio_duration = audio_info.duration
@@ -641,6 +696,7 @@ def assemble_video(slug: str, video_id: int) -> Path:
         act_windows=act_windows,
         header_text=header_text,
         header_accent_words=header_accent_words,
+        captioning_mode=captioning_mode,
     )
 
     update_video_path(video_id, str(output_path))

@@ -361,6 +361,18 @@ def set_tiktok_status(video_id: int, tiktok_status: str, tiktok_error: str = Non
     conn.close()
 
 
+def approve_preview_video(video_id: int) -> None:
+    """Flip a preview video to queued so the next scheduler run picks it up for upload."""
+    with _connect("videos") as conn:
+        conn.execute(
+            """UPDATE videos
+               SET youtube_status = CASE WHEN youtube_status = 'preview' THEN 'queued' ELSE youtube_status END,
+                   tiktok_status  = CASE WHEN tiktok_status  = 'preview' THEN 'queued' ELSE tiktok_status  END
+               WHERE id = ?""",
+            (video_id,),
+        )
+
+
 def get_videos_for_schedule_window(channel_slug: str, start_iso: str, end_iso: str) -> list[dict]:
     with _connect("videos") as conn:
         rows = conn.execute(
@@ -537,6 +549,50 @@ def get_video_service_costs(channel_slug: str, service: str) -> dict[int, dict]:
     for video_id in grouped:
         grouped[video_id]["total_usd"] = round(grouped[video_id]["total_usd"], 4)
     return grouped
+
+
+# ── Affiliate products ────────────────────────────────────────────────────────
+
+def _ensure_affiliate_table() -> None:
+    with _connect("videos") as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS affiliate_products (
+                subject      TEXT PRIMARY KEY,
+                asin         TEXT NOT NULL,
+                product_name TEXT,
+                price        TEXT,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+
+
+def get_affiliate_product(subject: str) -> Optional[dict]:
+    """Return affiliate product row for the given subject, or None if not mapped."""
+    _ensure_affiliate_table()
+    normalized = subject.lower().strip()
+    with _connect("videos") as conn:
+        row = conn.execute(
+            "SELECT * FROM affiliate_products WHERE subject = ?", (normalized,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_affiliate_product(
+    subject: str, asin: str, product_name: str = "", price: str = ""
+) -> None:
+    """Insert or replace an affiliate product mapping."""
+    _ensure_affiliate_table()
+    normalized = subject.lower().strip()
+    with _connect("videos") as conn:
+        conn.execute(
+            """INSERT INTO affiliate_products (subject, asin, product_name, price)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(subject) DO UPDATE SET
+                   asin = excluded.asin,
+                   product_name = excluded.product_name,
+                   price = excluded.price""",
+            (normalized, asin, product_name, price),
+        )
 
 
 # ── Cron / Ops ────────────────────────────────────────────────────────────────

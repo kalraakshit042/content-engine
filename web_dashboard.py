@@ -47,6 +47,7 @@ from database.queries import (
     get_latest_cron_run,
     get_recent_cron_runs,
     get_recent_cron_events,
+    approve_preview_video,
 )
 from layer1_account_setup.config_generator import generate_channel_config
 from layer1_account_setup.channel_art_generator import generate_channel_art
@@ -632,6 +633,13 @@ async def set_tiktok_url_route(slug: str, video_id: int, tiktok_url: str = Form(
     if clean:
         set_video_tiktok_url(video_id, clean)
         set_tiktok_status(video_id, "posted", None)
+    return RedirectResponse(f"/channel/{slug}", status_code=303)
+
+
+@app.post("/channel/{slug}/video/{video_id}/approve")
+async def approve_video_route(slug: str, video_id: int):
+    """Approve a preview-held video for upload — flips youtube_status + tiktok_status to 'queued'."""
+    approve_preview_video(video_id)
     return RedirectResponse(f"/channel/{slug}", status_code=303)
 
 
