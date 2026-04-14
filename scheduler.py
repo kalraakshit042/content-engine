@@ -218,6 +218,11 @@ def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime, publish_s
             set_tiktok_status(video_id, "preview", None)
             log(run_id, f"[{slug}] video {video_id} held for preview (preview_mode=true)", action="preview_hold", channel_slug=slug, video_id=video_id)
         else:
+            # Compute actual YouTube publish time NOW (right before upload), not before generation.
+            # publish_slot=None means the logical slot was already past — bump to now+15min so
+            # YouTube always receives a valid future timestamp regardless of generation duration.
+            if publish_slot is None or publish_slot <= datetime.now(ET) + timedelta(minutes=5):
+                publish_slot = datetime.now(ET) + timedelta(minutes=15)
             # Upload immediately to YouTube as a scheduled post.
             # YouTube handles delivery at publish_slot — we never post as "public now".
             et_str = publish_slot.astimezone(ET).strftime("%b %-d %I:%M %p ET")
@@ -428,17 +433,17 @@ def generate_due_videos(run_id: int) -> dict[str, int]:
 
         for i in range(to_generate):
             slot_et = all_slots[already_generated + i]
-            # If slot is already past (missed cron tick), bump publish time to now+15min
-            if slot_et <= now_et:
-                publish_slot = now_et + timedelta(minutes=15)
+            # Pass slot_missed=True when the slot is already past so generate_video_for_slot
+            # re-evaluates the publish time immediately before upload (not before generation).
+            # Generation takes 15-20 min, so pre-computing now+15min here would be stale.
+            slot_missed = slot_et <= now_et
+            if slot_missed:
                 log(run_id,
                     f"[{slug}] slot {slot_et.strftime('%H:%M')} ET already passed — "
-                    f"rescheduling to now+15min ({publish_slot.strftime('%H:%M')} ET)",
+                    f"publish time will be bumped to now+15min at upload",
                     action="slot_bumped", channel_slug=slug)
-            else:
-                publish_slot = slot_et
 
-            ok, _ = generate_video_for_slot(run_id, slug, slot_et, publish_slot=publish_slot)
+            ok, _ = generate_video_for_slot(run_id, slug, slot_et, publish_slot=None if slot_missed else slot_et)
             if ok:
                 generated += 1
             else:

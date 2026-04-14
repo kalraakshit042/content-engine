@@ -405,6 +405,11 @@ def publish_video(slug: str, video_id: int, slot: datetime = None) -> str:
 
     if slot is None:
         slot = next_publish_slot(slug)
+    # YouTube requires publishAt to be at least a few minutes in the future.
+    # Guard: if slot has drifted into the past (generation took longer than expected),
+    # bump to now+15min so YouTube never receives a stale timestamp.
+    if slot <= datetime.now(timezone.utc).astimezone(ET) + timedelta(minutes=5):
+        slot = datetime.now(timezone.utc).astimezone(ET) + timedelta(minutes=15)
     et_str = slot.astimezone(ET).strftime("%b %-d %I:%M %p ET")
     print(f"[{slug}] Scheduling video {video_id} for {et_str}...")
     yt_video_id = upload_video(slug, video_id, service, publish_at=slot)
