@@ -1,61 +1,45 @@
 """
 database/setup.py
 
-Creates all three SQLite databases and their tables.
-Run once on first use: python database/setup.py
+Creates all tables in Postgres.
+Run once: python database/setup.py
 """
 
-import sqlite3
 import os
-from pathlib import Path
+import psycopg2
+from dotenv import load_dotenv
 
-DB_DIR = Path(__file__).parent
-
-
-def get_db_path(name: str) -> str:
-    return str(DB_DIR / f"{name}.db")
+load_dotenv()
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    cols = {
-        row[1]
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
-    if column not in cols:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+def setup_postgres():
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    cur = conn.cursor()
 
-
-def setup_channels_db():
-    conn = sqlite3.connect(get_db_path("channels"))
-    conn.executescript("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS channels (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            id                  SERIAL PRIMARY KEY,
             name                TEXT NOT NULL,
             slug                TEXT NOT NULL UNIQUE,
             description         TEXT NOT NULL,
             status              TEXT DEFAULT 'pending',
-            is_live             INTEGER DEFAULT 0,
+            is_live             BOOLEAN DEFAULT FALSE,
             error_msg           TEXT,
             youtube_channel_url TEXT,
             youtube_channel_id  TEXT,
             tiktok_username     TEXT,
             tiktok_channel_url  TEXT,
             setup_checklist     TEXT DEFAULT '{}',
-            created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+            art_status              TEXT DEFAULT 'none',
+            avg_view_duration_secs  FLOAT DEFAULT NULL,
+            avg_view_percentage     FLOAT DEFAULT NULL,
+            created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
-    _ensure_column(conn, "channels", "art_status", "TEXT DEFAULT 'none'")
-    _ensure_column(conn, "channels", "setup_checklist", "TEXT DEFAULT '{}'")
-    conn.commit()
-    conn.close()
-    print("channels.db ready")
 
-
-def setup_videos_db():
-    conn = sqlite3.connect(get_db_path("videos"))
-    conn.executescript("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS videos (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            id                  SERIAL PRIMARY KEY,
             channel_slug        TEXT NOT NULL,
             status              TEXT DEFAULT 'generating',
             title               TEXT,
@@ -68,43 +52,35 @@ def setup_videos_db():
             image_path          TEXT,
             audio_path          TEXT,
             final_video_path    TEXT,
+            video_path          TEXT,
             youtube_video_id    TEXT,
             youtube_url         TEXT,
             youtube_views       INTEGER DEFAULT 0,
             youtube_comments    INTEGER DEFAULT 0,
             youtube_likes       INTEGER DEFAULT 0,
-            tiktok_posted       INTEGER DEFAULT 0,
+            youtube_status      TEXT,
+            youtube_error       TEXT,
+            youtube_posted_at   TIMESTAMP,
+            tiktok_posted       BOOLEAN DEFAULT FALSE,
             tiktok_url          TEXT,
+            tiktok_status       TEXT,
+            tiktok_error        TEXT,
+            tiktok_posted_at    TIMESTAMP,
+            tiktok_views        INTEGER DEFAULT 0,
+            tiktok_comments     INTEGER DEFAULT 0,
+            tiktok_likes        INTEGER DEFAULT 0,
+            tiktok_scheduled_for TIMESTAMP,
             stats_refreshed_at  TIMESTAMP,
             posted_at           TIMESTAMP,
             scheduled_for       TIMESTAMP,
-            comment_posted      INTEGER DEFAULT 0,
+            comment_posted      BOOLEAN DEFAULT FALSE,
             created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     """)
-    _ensure_column(conn, "videos", "video_path", "TEXT")
-    _ensure_column(conn, "videos", "scheduled_for", "TIMESTAMP")
-    _ensure_column(conn, "videos", "comment_posted", "INTEGER DEFAULT 0")
-    _ensure_column(conn, "videos", "youtube_status", "TEXT")
-    _ensure_column(conn, "videos", "youtube_error", "TEXT")
-    _ensure_column(conn, "videos", "youtube_posted_at", "TIMESTAMP")
-    _ensure_column(conn, "videos", "tiktok_status", "TEXT")
-    _ensure_column(conn, "videos", "tiktok_error", "TEXT")
-    _ensure_column(conn, "videos", "tiktok_posted_at", "TIMESTAMP")
-    _ensure_column(conn, "videos", "tiktok_views", "INTEGER DEFAULT 0")
-    _ensure_column(conn, "videos", "tiktok_comments", "INTEGER DEFAULT 0")
-    _ensure_column(conn, "videos", "tiktok_likes", "INTEGER DEFAULT 0")
-    _ensure_column(conn, "videos", "tiktok_scheduled_for", "TIMESTAMP")
-    conn.commit()
-    conn.close()
-    print("videos.db ready")
 
-
-def setup_costs_db():
-    conn = sqlite3.connect(get_db_path("costs"))
-    conn.executescript("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS costs (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            id            SERIAL PRIMARY KEY,
             channel_slug  TEXT NOT NULL,
             video_id      INTEGER,
             service       TEXT NOT NULL,
@@ -113,28 +89,24 @@ def setup_costs_db():
             tokens_output INTEGER,
             cost_usd      REAL DEFAULT 0,
             called_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     """)
-    conn.commit()
-    conn.close()
-    print("costs.db ready")
 
-
-def setup_ops_db():
-    conn = sqlite3.connect(get_db_path("ops"))
-    conn.executescript("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS cron_runs (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            id            SERIAL PRIMARY KEY,
             started_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             finished_at   TIMESTAMP,
             status        TEXT DEFAULT 'running',
             summary       TEXT,
             error_msg     TEXT,
             triggered_by  TEXT DEFAULT 'cron'
-        );
+        )
+    """)
 
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS cron_events (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            id            SERIAL PRIMARY KEY,
             run_id        INTEGER NOT NULL,
             level         TEXT DEFAULT 'info',
             channel_slug  TEXT,
@@ -142,16 +114,24 @@ def setup_ops_db():
             action        TEXT,
             message       TEXT NOT NULL,
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS affiliate_products (
+            subject      TEXT PRIMARY KEY,
+            asin         TEXT NOT NULL,
+            product_name TEXT,
+            price        TEXT,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
+    cur.close()
     conn.close()
-    print("ops.db ready")
+    print("All Postgres tables ready.")
 
 
 if __name__ == "__main__":
-    setup_channels_db()
-    setup_videos_db()
-    setup_costs_db()
-    setup_ops_db()
-    print("All databases initialised.")
+    setup_postgres()

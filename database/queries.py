@@ -1,78 +1,108 @@
 """
 database/queries.py
 
-All read/write helpers for channels.db, videos.db, costs.db.
+All read/write helpers. Uses Postgres (psycopg2) via DATABASE_URL env var.
 Every function opens its own connection — no shared state.
 """
 
 import json
-import sqlite3
-from pathlib import Path
+import os
+from contextlib import contextmanager
 from typing import Optional
 
-DB_DIR = Path(__file__).parent
+import psycopg2
+import psycopg2.extras
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 
-def _connect(db_name: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_DIR / f"{db_name}.db")
-    conn.row_factory = sqlite3.Row  # rows accessible as dicts
-    return conn
+@contextmanager
+def _conn():
+    """Open a connection, commit on success, rollback on error, always close."""
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _fetchone(cursor) -> Optional[dict]:
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def _fetchall(cursor) -> list[dict]:
+    return [dict(r) for r in cursor.fetchall()]
 
 
 # ── Channels ──────────────────────────────────────────────────────────────────
 
 def insert_channel(name: str, slug: str, description: str) -> None:
-    conn = _connect("channels")
-    conn.execute(
-        "INSERT INTO channels (name, slug, description) VALUES (?, ?, ?)",
-        (name, slug, description),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "INSERT INTO channels (name, slug, description) VALUES (%s, %s, %s)",
+                (name, slug, description),
+            )
 
 
 def get_channel(slug: str) -> Optional[dict]:
-    with _connect("channels") as conn:
-        row = conn.execute(
-            "SELECT * FROM channels WHERE slug = ?", (slug,)
-        ).fetchone()
-    return dict(row) if row else None
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM channels WHERE slug = %s", (slug,))
+            return _fetchone(cur)
 
 
 def get_all_channels() -> list[dict]:
-    with _connect("channels") as conn:
-        rows = conn.execute(
-            "SELECT * FROM channels ORDER BY created_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM channels ORDER BY created_at DESC")
+            return _fetchall(cur)
 
 
 def get_live_channels() -> list[dict]:
-    with _connect("channels") as conn:
-        rows = conn.execute(
-            "SELECT * FROM channels WHERE status = 'active' AND is_live = 1 ORDER BY created_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM channels WHERE status = 'active' AND is_live = TRUE ORDER BY created_at DESC"
+            )
+            return _fetchall(cur)
 
 
 def set_art_status(slug: str, art_status: str) -> None:
-    conn = _connect("channels")
-    conn.execute(
-        "UPDATE channels SET art_status = ? WHERE slug = ?",
-        (art_status, slug),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE channels SET art_status = %s WHERE slug = %s",
+                (art_status, slug),
+            )
 
 
 def set_channel_status(slug: str, status: str, error_msg: str = None) -> None:
-    conn = _connect("channels")
-    conn.execute(
-        "UPDATE channels SET status = ?, error_msg = ? WHERE slug = ?",
-        (status, error_msg, slug),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE channels SET status = %s, error_msg = %s WHERE slug = %s",
+                (status, error_msg, slug),
+            )
+
+
+def update_channel_analytics(slug: str, avg_duration_secs: float, avg_percentage: float) -> None:
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE channels
+                   SET avg_view_duration_secs = %s, avg_view_percentage = %s
+                   WHERE slug = %s""",
+                (avg_duration_secs, avg_percentage, slug),
+            )
 
 
 def update_channel_links(
@@ -83,102 +113,104 @@ def update_channel_links(
     tiktok_username: str,
     tiktok_channel_url: str,
 ) -> None:
-    conn = _connect("channels")
-    conn.execute(
-        """UPDATE channels SET
-            is_live = ?,
-            youtube_channel_url = ?,
-            youtube_channel_id = ?,
-            tiktok_username = ?,
-            tiktok_channel_url = ?
-           WHERE slug = ?""",
-        (is_live, youtube_channel_url, youtube_channel_id,
-         tiktok_username, tiktok_channel_url, slug),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE channels SET
+                    is_live = %s,
+                    youtube_channel_url = %s,
+                    youtube_channel_id = %s,
+                    tiktok_username = %s,
+                    tiktok_channel_url = %s
+                   WHERE slug = %s""",
+                (bool(is_live), youtube_channel_url, youtube_channel_id,
+                 tiktok_username, tiktok_channel_url, slug),
+            )
 
 
 def get_channel_checklist(slug: str) -> dict:
-    with _connect("channels") as conn:
-        row = conn.execute(
-            "SELECT setup_checklist FROM channels WHERE slug = ?",
-            (slug,),
-        ).fetchone()
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT setup_checklist FROM channels WHERE slug = %s", (slug,)
+            )
+            row = _fetchone(cur)
     if not row or not row["setup_checklist"]:
         return {}
     try:
-        return json.loads(row["setup_checklist"])
+        val = row["setup_checklist"]
+        return val if isinstance(val, dict) else json.loads(val)
     except Exception:
         return {}
 
 
 def update_channel_checklist(slug: str, checklist_state: dict) -> None:
-    conn = _connect("channels")
-    conn.execute(
-        "UPDATE channels SET setup_checklist = ? WHERE slug = ?",
-        (json.dumps(checklist_state), slug),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE channels SET setup_checklist = %s WHERE slug = %s",
+                (json.dumps(checklist_state), slug),
+            )
 
 
 def delete_channel(slug: str) -> None:
-    conn = _connect("channels")
-    conn.execute("DELETE FROM channels WHERE slug = ?", (slug,))
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM channels WHERE slug = %s", (slug,))
 
 
 # ── Videos ────────────────────────────────────────────────────────────────────
 
 def insert_video(channel_slug: str) -> int:
-    with _connect("videos") as conn:
-        cursor = conn.execute(
-            "INSERT INTO videos (channel_slug) VALUES (?)", (channel_slug,)
-        )
-        return cursor.lastrowid
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO videos (channel_slug) VALUES (%s) RETURNING id",
+                (channel_slug,),
+            )
+            return cur.fetchone()[0]
 
 
 def get_video(video_id: int) -> Optional[dict]:
-    with _connect("videos") as conn:
-        row = conn.execute(
-            "SELECT * FROM videos WHERE id = ?", (video_id,)
-        ).fetchone()
-    return dict(row) if row else None
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM videos WHERE id = %s", (video_id,))
+            return _fetchone(cur)
 
 
 def get_channel_videos(channel_slug: str) -> list[dict]:
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            "SELECT * FROM videos WHERE channel_slug = ? ORDER BY created_at DESC",
-            (channel_slug,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM videos WHERE channel_slug = %s ORDER BY created_at DESC",
+                (channel_slug,),
+            )
+            return _fetchall(cur)
 
 
 def get_all_videos() -> list[dict]:
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            "SELECT * FROM videos ORDER BY created_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM videos ORDER BY created_at DESC")
+            return _fetchall(cur)
 
 
 def set_video_status(video_id: int, status: str) -> None:
-    with _connect("videos") as conn:
-        conn.execute(
-            "UPDATE videos SET status = ? WHERE id = ?", (status, video_id)
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET status = %s WHERE id = %s", (status, video_id)
+            )
 
 
 def get_used_subjects(channel_slug: str) -> list[str]:
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            "SELECT subject FROM videos WHERE channel_slug = ? AND subject IS NOT NULL AND status != 'error'",
-            (channel_slug,),
-        ).fetchall()
-    return [r["subject"] for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT subject FROM videos WHERE channel_slug = %s AND subject IS NOT NULL AND status != 'error'",
+                (channel_slug,),
+            )
+            return [r["subject"] for r in _fetchall(cur)]
 
 
 def update_video_script(
@@ -191,45 +223,38 @@ def update_video_script(
     music_mood_used: str,
     script_path: str,
 ) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        """UPDATE videos SET
-               title = ?, subject = ?, tone_used = ?, visual_style_used = ?,
-               voice_style_used = ?, music_mood_used = ?, script_path = ?, status = 'scripted'
-           WHERE id = ?""",
-        (title, subject, tone_used, visual_style_used,
-         voice_style_used, music_mood_used, script_path, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos SET
+                       title = %s, subject = %s, tone_used = %s, visual_style_used = %s,
+                       voice_style_used = %s, music_mood_used = %s, script_path = %s, status = 'scripted'
+                   WHERE id = %s""",
+                (title, subject, tone_used, visual_style_used,
+                 voice_style_used, music_mood_used, script_path, video_id),
+            )
 
 
 def update_video_path(video_id: int, video_path: str) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        "UPDATE videos SET final_video_path = ?, status = 'video_done' WHERE id = ?",
-        (video_path, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET final_video_path = %s, status = 'video_done' WHERE id = %s",
+                (video_path, video_id),
+            )
 
 
 def get_published_videos(channel_slug: str) -> list:
-    conn = _connect("videos")
-    rows = conn.execute(
-        "SELECT * FROM videos WHERE channel_slug = ? AND youtube_video_id IS NOT NULL",
-        (channel_slug,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM videos WHERE channel_slug = %s AND youtube_video_id IS NOT NULL",
+                (channel_slug,),
+            )
+            return _fetchall(cur)
 
 
 def count_generated_today(channel_slug: str) -> int:
-    """
-    Count non-error video rows created today for this channel (ET midnight).
-    Used by the scheduler to know how many slots have already been claimed today,
-    so it doesn't double-generate on repeat cron ticks.
-    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -237,19 +262,19 @@ def count_generated_today(channel_slug: str) -> int:
     now_et = datetime.now(_ET)
     today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
-    with _connect("videos") as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) FROM videos
-               WHERE channel_slug = ?
-               AND status != 'error'
-               AND created_at >= ?""",
-            (channel_slug, today_et_start_utc),
-        ).fetchone()
-    return row[0] if row else 0
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM videos
+                   WHERE channel_slug = %s
+                   AND status != 'error'
+                   AND created_at >= %s""",
+                (channel_slug, today_et_start_utc),
+            )
+            return cur.fetchone()[0]
 
 
 def count_posted_today(channel_slug: str) -> int:
-    """Count videos posted to YouTube since midnight ET today."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -257,19 +282,19 @@ def count_posted_today(channel_slug: str) -> int:
     now_et = datetime.now(_ET)
     today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
-    with _connect("videos") as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) FROM videos
-               WHERE channel_slug = ?
-               AND youtube_status = 'posted'
-               AND youtube_posted_at >= ?""",
-            (channel_slug, today_et_start_utc),
-        ).fetchone()
-    return row[0] if row else 0
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM videos
+                   WHERE channel_slug = %s
+                   AND youtube_status = 'posted'
+                   AND youtube_posted_at >= %s""",
+                (channel_slug, today_et_start_utc),
+            )
+            return cur.fetchone()[0]
 
 
 def count_tiktok_posted_today(channel_slug: str) -> int:
-    """Count videos posted to TikTok since midnight ET today."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -277,26 +302,26 @@ def count_tiktok_posted_today(channel_slug: str) -> int:
     now_et = datetime.now(_ET)
     today_et_start = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     today_et_start_utc = today_et_start.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
-    with _connect("videos") as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) FROM videos
-               WHERE channel_slug = ?
-               AND tiktok_status = 'posted'
-               AND tiktok_posted_at >= ?""",
-            (channel_slug, today_et_start_utc),
-        ).fetchone()
-    return row[0] if row else 0
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM videos
+                   WHERE channel_slug = %s
+                   AND tiktok_status = 'posted'
+                   AND tiktok_posted_at >= %s""",
+                (channel_slug, today_et_start_utc),
+            )
+            return cur.fetchone()[0]
 
 
 def update_video_stats(video_id: int, views: int, comments: int, likes: int) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        """UPDATE videos SET youtube_views = ?, youtube_comments = ?, youtube_likes = ?,
-           stats_refreshed_at = CURRENT_TIMESTAMP WHERE id = ?""",
-        (views, comments, likes, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos SET youtube_views = %s, youtube_comments = %s, youtube_likes = %s,
+                   stats_refreshed_at = CURRENT_TIMESTAMP WHERE id = %s""",
+                (views, comments, likes, video_id),
+            )
 
 
 def update_video_youtube(
@@ -305,37 +330,35 @@ def update_video_youtube(
     yt_url: str,
     scheduled_for: str = None,
 ) -> None:
-    conn = _connect("videos")
-    if scheduled_for:
-        conn.execute(
-            """UPDATE videos
-               SET youtube_video_id = ?, youtube_url = ?, status = 'scheduled',
-                   youtube_status = 'scheduled',
-                   scheduled_for = ?, posted_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (yt_video_id, yt_url, scheduled_for, video_id),
-        )
-    else:
-        conn.execute(
-            """UPDATE videos
-               SET youtube_video_id = ?, youtube_url = ?, status = 'published',
-                   youtube_status = 'posted', youtube_posted_at = CURRENT_TIMESTAMP,
-                   posted_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (yt_video_id, yt_url, video_id),
-        )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            if scheduled_for:
+                cur.execute(
+                    """UPDATE videos
+                       SET youtube_video_id = %s, youtube_url = %s, status = 'scheduled',
+                           youtube_status = 'scheduled',
+                           scheduled_for = %s, posted_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (yt_video_id, yt_url, scheduled_for, video_id),
+                )
+            else:
+                cur.execute(
+                    """UPDATE videos
+                       SET youtube_video_id = %s, youtube_url = %s, status = 'published',
+                           youtube_status = 'posted', youtube_posted_at = CURRENT_TIMESTAMP,
+                           posted_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (yt_video_id, yt_url, video_id),
+                )
 
 
 def set_youtube_status(video_id: int, youtube_status: str, youtube_error: str = None) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        "UPDATE videos SET youtube_status = ?, youtube_error = ? WHERE id = ?",
-        (youtube_status, youtube_error, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET youtube_status = %s, youtube_error = %s WHERE id = %s",
+                (youtube_status, youtube_error, video_id),
+            )
 
 
 def update_video_tiktok(
@@ -344,149 +367,150 @@ def update_video_tiktok(
     tiktok_status: str = "posted",
     tiktok_error: str = None,
 ) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        """UPDATE videos
-           SET tiktok_posted = ?, tiktok_url = ?, tiktok_status = ?,
-               tiktok_error = ?, tiktok_posted_at = CASE
-                   WHEN ? = 'posted' THEN CURRENT_TIMESTAMP
-                   ELSE tiktok_posted_at
-               END
-           WHERE id = ?""",
-        (1 if tiktok_status == "posted" else 0, tiktok_url, tiktok_status, tiktok_error, tiktok_status, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos
+                   SET tiktok_posted = %s, tiktok_url = %s, tiktok_status = %s,
+                       tiktok_error = %s, tiktok_posted_at = CASE
+                           WHEN %s = 'posted' THEN CURRENT_TIMESTAMP
+                           ELSE tiktok_posted_at
+                       END
+                   WHERE id = %s""",
+                (tiktok_status == "posted", tiktok_url, tiktok_status,
+                 tiktok_error, tiktok_status, video_id),
+            )
 
 
 def set_video_tiktok_url(video_id: int, tiktok_url: str) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        """UPDATE videos
-           SET tiktok_url = ?,
-               tiktok_posted = 1,
-               tiktok_status = 'posted',
-               tiktok_error = NULL,
-               tiktok_posted_at = COALESCE(tiktok_posted_at, CURRENT_TIMESTAMP)
-           WHERE id = ?""",
-        (tiktok_url, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos
+                   SET tiktok_url = %s,
+                       tiktok_posted = TRUE,
+                       tiktok_status = 'posted',
+                       tiktok_error = NULL,
+                       tiktok_posted_at = COALESCE(tiktok_posted_at, CURRENT_TIMESTAMP)
+                   WHERE id = %s""",
+                (tiktok_url, video_id),
+            )
 
 
 def set_tiktok_status(video_id: int, tiktok_status: str, tiktok_error: str = None) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        "UPDATE videos SET tiktok_status = ?, tiktok_error = ? WHERE id = ?",
-        (tiktok_status, tiktok_error, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET tiktok_status = %s, tiktok_error = %s WHERE id = %s",
+                (tiktok_status, tiktok_error, video_id),
+            )
 
 
 def approve_preview_video(video_id: int) -> None:
-    """Flip a preview video to queued so the next scheduler run picks it up for upload."""
-    with _connect("videos") as conn:
-        conn.execute(
-            """UPDATE videos
-               SET youtube_status = CASE WHEN youtube_status = 'preview' THEN 'queued' ELSE youtube_status END,
-                   tiktok_status  = CASE WHEN tiktok_status  = 'preview' THEN 'queued' ELSE tiktok_status  END
-               WHERE id = ?""",
-            (video_id,),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos
+                   SET youtube_status = CASE WHEN youtube_status = 'preview' THEN 'queued' ELSE youtube_status END,
+                       tiktok_status  = CASE WHEN tiktok_status  = 'preview' THEN 'queued' ELSE tiktok_status  END
+                   WHERE id = %s""",
+                (video_id,),
+            )
 
 
 def get_videos_for_schedule_window(channel_slug: str, start_iso: str, end_iso: str) -> list[dict]:
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            """SELECT * FROM videos
-               WHERE channel_slug = ?
-                 AND scheduled_for IS NOT NULL
-                 AND scheduled_for >= ?
-                 AND scheduled_for <= ?
-               ORDER BY scheduled_for ASC""",
-            (channel_slug, start_iso, end_iso),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM videos
+                   WHERE channel_slug = %s
+                     AND scheduled_for IS NOT NULL
+                     AND scheduled_for >= %s
+                     AND scheduled_for <= %s
+                   ORDER BY scheduled_for ASC""",
+                (channel_slug, start_iso, end_iso),
+            )
+            return _fetchall(cur)
 
 
 def update_tiktok_stats(video_id: int, views: int, comments: int, likes: int) -> None:
-    conn = _connect("videos")
-    conn.execute(
-        """UPDATE videos SET tiktok_views = ?, tiktok_comments = ?, tiktok_likes = ?,
-           stats_refreshed_at = CURRENT_TIMESTAMP WHERE id = ?""",
-        (views, comments, likes, video_id),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE videos SET tiktok_views = %s, tiktok_comments = %s, tiktok_likes = %s,
+                   stats_refreshed_at = CURRENT_TIMESTAMP WHERE id = %s""",
+                (views, comments, likes, video_id),
+            )
 
 
 def get_videos_for_cleanup(days_old: int = 14) -> list[dict]:
-    """Returns published videos older than days_old whose local files can be purged."""
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            """SELECT id, channel_slug, final_video_path, audio_path, image_path
-               FROM videos
-               WHERE status IN ('published', 'scheduled')
-               AND posted_at IS NOT NULL
-               AND posted_at < datetime('now', ?)
-               AND final_video_path IS NOT NULL""",
-            (f"-{days_old} days",),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, channel_slug, final_video_path, audio_path, image_path
+                   FROM videos
+                   WHERE status IN ('published', 'scheduled')
+                   AND posted_at IS NOT NULL
+                   AND posted_at < NOW() - (%s || ' days')::interval
+                   AND final_video_path IS NOT NULL""",
+                (str(days_old),),
+            )
+            return _fetchall(cur)
 
 
 def clear_video_local_paths(video_id: int) -> None:
-    """Nulls out local file path columns after cleanup."""
-    with _connect("videos") as conn:
-        conn.execute(
-            "UPDATE videos SET final_video_path = NULL, audio_path = NULL, image_path = NULL WHERE id = ?",
-            (video_id,),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET final_video_path = NULL, audio_path = NULL, image_path = NULL WHERE id = %s",
+                (video_id,),
+            )
 
 
 def mark_comment_posted(video_id: int) -> None:
-    with _connect("videos") as conn:
-        conn.execute(
-            "UPDATE videos SET comment_posted = 1 WHERE id = ?", (video_id,)
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET comment_posted = TRUE WHERE id = %s", (video_id,)
+            )
 
 
 def get_scheduled_slots(channel_slug: str) -> list[str]:
-    """Returns all reserved scheduled_for timestamps for this channel (any status)."""
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            "SELECT scheduled_for FROM videos WHERE channel_slug = ? AND scheduled_for IS NOT NULL",
-            (channel_slug,),
-        ).fetchall()
-    return [r["scheduled_for"] for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT scheduled_for FROM videos WHERE channel_slug = %s AND scheduled_for IS NOT NULL",
+                (channel_slug,),
+            )
+            return [str(r["scheduled_for"]) for r in _fetchall(cur)]
 
 
 def set_video_scheduled_for(video_id: int, scheduled_for: str) -> None:
-    with _connect("videos") as conn:
-        conn.execute(
-            "UPDATE videos SET scheduled_for = ? WHERE id = ?",
-            (scheduled_for, video_id),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET scheduled_for = %s WHERE id = %s",
+                (scheduled_for, video_id),
+            )
 
 
 def set_video_tiktok_scheduled_for(video_id: int, tiktok_scheduled_for: str) -> None:
-    with _connect("videos") as conn:
-        conn.execute(
-            "UPDATE videos SET tiktok_scheduled_for = ? WHERE id = ?",
-            (tiktok_scheduled_for, video_id),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET tiktok_scheduled_for = %s WHERE id = %s",
+                (tiktok_scheduled_for, video_id),
+            )
 
 
 def get_tiktok_scheduled_slots(channel_slug: str) -> list[str]:
-    """Returns all reserved tiktok_scheduled_for timestamps for this channel (any status)."""
-    with _connect("videos") as conn:
-        rows = conn.execute(
-            "SELECT tiktok_scheduled_for FROM videos WHERE channel_slug = ? AND tiktok_scheduled_for IS NOT NULL",
-            (channel_slug,),
-        ).fetchall()
-    return [r["tiktok_scheduled_for"] for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT tiktok_scheduled_for FROM videos WHERE channel_slug = %s AND tiktok_scheduled_for IS NOT NULL",
+                (channel_slug,),
+            )
+            return [str(r["tiktok_scheduled_for"]) for r in _fetchall(cur)]
 
 
 # ── Costs ─────────────────────────────────────────────────────────────────────
@@ -500,144 +524,151 @@ def log_cost(
     cost_usd: float,
     video_id: int = None,
 ) -> None:
-    conn = _connect("costs")
-    conn.execute(
-        """INSERT INTO costs
-           (channel_slug, video_id, service, model, tokens_input, tokens_output, cost_usd)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (channel_slug, video_id, service, model,
-         tokens_input, tokens_output, cost_usd),
-    )
-    conn.commit()
-    conn.close()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO costs
+                   (channel_slug, video_id, service, model, tokens_input, tokens_output, cost_usd)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (channel_slug, video_id, service, model,
+                 tokens_input, tokens_output, cost_usd),
+            )
 
 
 def get_channel_costs(channel_slug: str) -> list[dict]:
-    with _connect("costs") as conn:
-        rows = conn.execute(
-            "SELECT * FROM costs WHERE channel_slug = ? ORDER BY called_at DESC",
-            (channel_slug,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM costs WHERE channel_slug = %s ORDER BY called_at DESC",
+                (channel_slug,),
+            )
+            return _fetchall(cur)
 
 
 def get_channel_service_costs(channel_slug: str, service: str) -> list[dict]:
-    with _connect("costs") as conn:
-        rows = conn.execute(
-            """SELECT * FROM costs
-               WHERE channel_slug = ? AND service = ?
-               ORDER BY called_at DESC""",
-            (channel_slug, service),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM costs
+                   WHERE channel_slug = %s AND service = %s
+                   ORDER BY called_at DESC""",
+                (channel_slug, service),
+            )
+            return _fetchall(cur)
 
 
 def get_channel_service_total_usd(channel_slug: str, service: str) -> float:
-    with _connect("costs") as conn:
-        row = conn.execute(
-            """SELECT COALESCE(SUM(cost_usd), 0) AS total
-               FROM costs
-               WHERE channel_slug = ? AND service = ?""",
-            (channel_slug, service),
-        ).fetchone()
-    return round(row["total"], 4)
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COALESCE(SUM(cost_usd), 0) AS total
+                   FROM costs
+                   WHERE channel_slug = %s AND service = %s""",
+                (channel_slug, service),
+            )
+            return round(float(cur.fetchone()[0]), 4)
 
 
 def get_total_cost_usd(channel_slug: str) -> float:
-    with _connect("costs") as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM costs WHERE channel_slug = ?",
-            (channel_slug,),
-        ).fetchone()
-    return round(row["total"], 4)
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) as total FROM costs WHERE channel_slug = %s",
+                (channel_slug,),
+            )
+            return round(float(cur.fetchone()[0]), 4)
 
 
 def get_video_service_costs(channel_slug: str, service: str) -> dict[int, dict]:
-    with _connect("costs") as conn:
-        rows = conn.execute(
-            """SELECT * FROM costs
-               WHERE channel_slug = ? AND service = ? AND video_id IS NOT NULL
-               ORDER BY called_at DESC""",
-            (channel_slug, service),
-        ).fetchall()
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM costs
+                   WHERE channel_slug = %s AND service = %s AND video_id IS NOT NULL
+                   ORDER BY called_at DESC""",
+                (channel_slug, service),
+            )
+            rows = _fetchall(cur)
 
     grouped: dict[int, dict] = {}
-    for row in rows:
-        entry = dict(row)
+    for entry in rows:
         video_id = entry["video_id"]
         if video_id not in grouped:
             grouped[video_id] = {"total_usd": 0.0, "entries": []}
         grouped[video_id]["total_usd"] += entry.get("cost_usd") or 0.0
         grouped[video_id]["entries"].append(entry)
 
-    for video_id in grouped:
-        grouped[video_id]["total_usd"] = round(grouped[video_id]["total_usd"], 4)
+    for vid in grouped:
+        grouped[vid]["total_usd"] = round(grouped[vid]["total_usd"], 4)
     return grouped
 
 
 # ── Affiliate products ────────────────────────────────────────────────────────
 
 def _ensure_affiliate_table() -> None:
-    with _connect("videos") as conn:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS affiliate_products (
-                subject      TEXT PRIMARY KEY,
-                asin         TEXT NOT NULL,
-                product_name TEXT,
-                price        TEXT,
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )"""
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS affiliate_products (
+                    subject      TEXT PRIMARY KEY,
+                    asin         TEXT NOT NULL,
+                    product_name TEXT,
+                    price        TEXT,
+                    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
 
 
 def get_affiliate_product(subject: str) -> Optional[dict]:
-    """Return affiliate product row for the given subject, or None if not mapped."""
     _ensure_affiliate_table()
     normalized = subject.lower().strip()
-    with _connect("videos") as conn:
-        row = conn.execute(
-            "SELECT * FROM affiliate_products WHERE subject = ?", (normalized,)
-        ).fetchone()
-    return dict(row) if row else None
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM affiliate_products WHERE subject = %s", (normalized,)
+            )
+            return _fetchone(cur)
 
 
 def upsert_affiliate_product(
     subject: str, asin: str, product_name: str = "", price: str = ""
 ) -> None:
-    """Insert or replace an affiliate product mapping."""
     _ensure_affiliate_table()
     normalized = subject.lower().strip()
-    with _connect("videos") as conn:
-        conn.execute(
-            """INSERT INTO affiliate_products (subject, asin, product_name, price)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(subject) DO UPDATE SET
-                   asin = excluded.asin,
-                   product_name = excluded.product_name,
-                   price = excluded.price""",
-            (normalized, asin, product_name, price),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO affiliate_products (subject, asin, product_name, price)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT(subject) DO UPDATE SET
+                       asin = EXCLUDED.asin,
+                       product_name = EXCLUDED.product_name,
+                       price = EXCLUDED.price""",
+                (normalized, asin, product_name, price),
+            )
 
 
 # ── Cron / Ops ────────────────────────────────────────────────────────────────
 
 def create_cron_run(triggered_by: str = "cron") -> int:
-    with _connect("ops") as conn:
-        cursor = conn.execute(
-            "INSERT INTO cron_runs (triggered_by) VALUES (?)",
-            (triggered_by,),
-        )
-        return cursor.lastrowid
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO cron_runs (triggered_by) VALUES (%s) RETURNING id",
+                (triggered_by,),
+            )
+            return cur.fetchone()[0]
 
 
 def finish_cron_run(run_id: int, status: str, summary: str = "", error_msg: str = None) -> None:
-    with _connect("ops") as conn:
-        conn.execute(
-            """UPDATE cron_runs
-               SET finished_at = CURRENT_TIMESTAMP, status = ?, summary = ?, error_msg = ?
-               WHERE id = ?""",
-            (status, summary, error_msg, run_id),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE cron_runs
+                   SET finished_at = CURRENT_TIMESTAMP, status = %s, summary = %s, error_msg = %s
+                   WHERE id = %s""",
+                (status, summary, error_msg, run_id),
+            )
 
 
 def log_cron_event(
@@ -648,38 +679,38 @@ def log_cron_event(
     channel_slug: str = None,
     video_id: int = None,
 ) -> None:
-    with _connect("ops") as conn:
-        conn.execute(
-            """INSERT INTO cron_events (run_id, level, channel_slug, video_id, action, message)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (run_id, level, channel_slug, video_id, action, message),
-        )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO cron_events (run_id, level, channel_slug, video_id, action, message)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (run_id, level, channel_slug, video_id, action, message),
+            )
 
 
 def get_latest_cron_run() -> Optional[dict]:
-    with _connect("ops") as conn:
-        row = conn.execute(
-            "SELECT * FROM cron_runs ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-    return dict(row) if row else None
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM cron_runs ORDER BY id DESC LIMIT 1")
+            return _fetchone(cur)
 
 
 def get_recent_cron_runs(limit: int = 8) -> list[dict]:
-    with _connect("ops") as conn:
-        rows = conn.execute(
-            "SELECT * FROM cron_runs ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM cron_runs ORDER BY id DESC LIMIT %s", (limit,)
+            )
+            return _fetchall(cur)
 
 
 def get_recent_cron_events(limit: int = 20) -> list[dict]:
-    with _connect("ops") as conn:
-        rows = conn.execute(
-            "SELECT * FROM cron_events ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM cron_events ORDER BY id DESC LIMIT %s", (limit,)
+            )
+            return _fetchall(cur)
 
 
 # ── Global stats ──────────────────────────────────────────────────────────────
@@ -688,32 +719,37 @@ def get_global_stats() -> dict:
     channels = get_all_channels()
     total_channels = len(channels)
 
-    with _connect("videos") as conn:
-        row = conn.execute(
-            """SELECT
-                   COUNT(*) as total,
-                   COALESCE(SUM(youtube_views), 0) as youtube_views,
-                   COALESCE(SUM(tiktok_views), 0) as tiktok_views,
-                   COALESCE(SUM(youtube_likes), 0) as youtube_likes,
-                   COALESCE(SUM(tiktok_likes), 0) as tiktok_likes,
-                   COALESCE(SUM(youtube_comments), 0) as youtube_comments,
-                   COALESCE(SUM(tiktok_comments), 0) as tiktok_comments
-               FROM videos"""
-        ).fetchone()
-        total_videos = row["total"]
-        total_views = row["youtube_views"] + row["tiktok_views"]
-        total_likes = row["youtube_likes"] + row["tiktok_likes"]
-        total_comments = row["youtube_comments"] + row["tiktok_comments"]
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       COUNT(*) as total,
+                       COUNT(*) FILTER (WHERE youtube_status = 'posted') as yt_posted,
+                       COALESCE(SUM(youtube_views), 0) as youtube_views,
+                       COALESCE(SUM(tiktok_views), 0) as tiktok_views,
+                       COALESCE(SUM(youtube_likes), 0) as youtube_likes,
+                       COALESCE(SUM(tiktok_likes), 0) as tiktok_likes,
+                       COALESCE(SUM(youtube_comments), 0) as youtube_comments,
+                       COALESCE(SUM(tiktok_comments), 0) as tiktok_comments
+                   FROM videos"""
+            )
+            row = cur.fetchone()
+            total_videos = row[0]
+            total_posted = row[1]
+            total_views = row[2] + row[3]
+            total_likes = row[4] + row[5]
+            total_comments = row[6] + row[7]
 
-    with _connect("costs") as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM costs WHERE service = 'claude'"
-        ).fetchone()
-        total_claude_cost = round(row["total"], 4)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) as total FROM costs WHERE service = 'claude'"
+            )
+            total_claude_cost = round(float(cur.fetchone()[0]), 4)
 
     return {
         "total_channels": total_channels,
         "total_videos": total_videos,
+        "total_posted": total_posted,
         "total_views": total_views,
         "total_likes": total_likes,
         "total_comments": total_comments,
@@ -723,31 +759,33 @@ def get_global_stats() -> dict:
 
 
 def get_channel_rollups() -> dict[str, dict]:
-    with _connect("videos") as conn:
-        video_rows = conn.execute(
-            """SELECT
-                   channel_slug,
-                   COALESCE(SUM(youtube_likes), 0) as youtube_likes,
-                   COALESCE(SUM(tiktok_likes), 0) as tiktok_likes,
-                   COALESCE(SUM(youtube_comments), 0) as youtube_comments,
-                   COALESCE(SUM(tiktok_comments), 0) as tiktok_comments
-               FROM videos
-               GROUP BY channel_slug"""
-        ).fetchall()
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT
+                       channel_slug,
+                       COALESCE(SUM(youtube_likes), 0) as youtube_likes,
+                       COALESCE(SUM(tiktok_likes), 0) as tiktok_likes,
+                       COALESCE(SUM(youtube_comments), 0) as youtube_comments,
+                       COALESCE(SUM(tiktok_comments), 0) as tiktok_comments
+                   FROM videos
+                   GROUP BY channel_slug"""
+            )
+            video_rows = _fetchall(cur)
 
-    with _connect("costs") as conn:
-        cost_rows = conn.execute(
-            """SELECT
-                   channel_slug,
-                   COALESCE(SUM(cost_usd), 0) as claude_cost_usd
-               FROM costs
-               WHERE service = 'claude'
-               GROUP BY channel_slug"""
-        ).fetchall()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT
+                       channel_slug,
+                       COALESCE(SUM(cost_usd), 0) as claude_cost_usd
+                   FROM costs
+                   WHERE service = 'claude'
+                   GROUP BY channel_slug"""
+            )
+            cost_rows = _fetchall(cur)
 
     rollups: dict[str, dict] = {}
-    for row in video_rows:
-        item = dict(row)
+    for item in video_rows:
         rollups[item["channel_slug"]] = {
             "claude_cost_usd": 0.0,
             "youtube_likes": item["youtube_likes"] or 0,
@@ -758,8 +796,7 @@ def get_channel_rollups() -> dict[str, dict]:
             "total_comments": (item["youtube_comments"] or 0) + (item["tiktok_comments"] or 0),
         }
 
-    for row in cost_rows:
-        item = dict(row)
+    for item in cost_rows:
         bucket = rollups.setdefault(
             item["channel_slug"],
             {
@@ -772,6 +809,6 @@ def get_channel_rollups() -> dict[str, dict]:
                 "total_comments": 0,
             },
         )
-        bucket["claude_cost_usd"] = round(item["claude_cost_usd"] or 0.0, 4)
+        bucket["claude_cost_usd"] = round(float(item["claude_cost_usd"] or 0.0), 4)
 
     return rollups
