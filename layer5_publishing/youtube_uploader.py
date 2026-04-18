@@ -60,6 +60,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 # YouTube category IDs
@@ -122,12 +123,8 @@ def _load_channel_config(slug: str) -> ChannelConfig:
     return ChannelConfig(**json.loads(config_path.read_text()))
 
 
-def authenticate(slug: str):
-    """
-    OAuth2 desktop flow. Token cached at credentials/{slug}_token.json.
-    First call opens a browser for consent. Subsequent calls use the refresh token.
-    Returns an authenticated YouTube API service resource.
-    """
+def _get_credentials(slug: str):
+    """Get (and refresh/reauthorize if needed) OAuth credentials for a channel."""
     token_path = CREDENTIALS_DIR / f"{slug}_token.json"
     creds = None
 
@@ -142,7 +139,16 @@ def authenticate(slug: str):
             creds = flow.run_local_server(port=0)
         token_path.write_text(creds.to_json())
 
-    return build("youtube", "v3", credentials=creds)
+    return creds
+
+
+def authenticate(slug: str):
+    """
+    OAuth2 desktop flow. Token cached at credentials/{slug}_token.json.
+    First call opens a browser for consent. Subsequent calls use the refresh token.
+    Returns an authenticated YouTube Data API v3 service resource.
+    """
+    return build("youtube", "v3", credentials=_get_credentials(slug))
 
 
 def check_token_health(slug: str) -> dict:
@@ -164,6 +170,34 @@ def check_token_health(slug: str) -> dict:
         return {"ok": False, "reason": "Token expired and cannot be refreshed — re-authenticate"}
     except Exception as e:
         return {"ok": False, "reason": str(e)}
+
+
+def fetch_channel_analytics(slug: str) -> dict:
+    """
+    Fetch channel-level avg view duration and retention % from YouTube Analytics API.
+    Stores results in DB. Returns {"avg_view_duration_secs": float, "avg_view_percentage": float}
+    or {} on failure.
+    """
+    from database.queries import update_channel_analytics
+    try:
+        creds = _get_credentials(slug)
+        analytics = build("youtubeAnalytics", "v2", credentials=creds)
+        today = datetime.now().strftime("%Y-%m-%d")
+        resp = analytics.reports().query(
+            ids="channel==MINE",
+            startDate="2020-01-01",
+            endDate=today,
+            metrics="averageViewDuration,averageViewPercentage",
+        ).execute()
+        rows = resp.get("rows")
+        if rows and len(rows[0]) >= 2:
+            avg_duration = float(rows[0][0])
+            avg_pct = float(rows[0][1])
+            update_channel_analytics(slug, avg_duration, avg_pct)
+            return {"avg_view_duration_secs": avg_duration, "avg_view_percentage": avg_pct}
+    except Exception as e:
+        print(f"  [analytics] {slug}: {e}")
+    return {}
 
 
 def upload_video(slug: str, video_id: int, service, publish_at: datetime = None) -> str:
@@ -391,6 +425,11 @@ def refresh_channel_stats(slug: str) -> dict:
         vid = next(v for v in videos if v["youtube_video_id"] == item["id"])
         update_video_stats(vid["id"], views, comments, likes)
         result[vid["id"]] = {"views": views, "comments": comments, "likes": likes}
+
+    analytics = fetch_channel_analytics(slug)
+    if analytics:
+        result["_analytics"] = analytics
+
     return result
 
 
