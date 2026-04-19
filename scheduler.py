@@ -253,23 +253,10 @@ def generate_video_for_slot(run_id: int, slug: str, slot_et: datetime, publish_s
 
 def _videos_per_day(channel_created_at: str | None) -> int:
     """
-    Return target videos/day based on how many days since channel went live.
-
-    Week 1 (days 0-6):  1 video/day — establish cadence, single 8AM-5PM ET window
-    Week 2+ (days 7+):  2 videos/day — first 8-11AM ET, second 2-5PM ET
-
+    Return target videos/day. Currently hardcapped at 1.
     high_velocity_mode=true in channel_config.json overrides to 5/day (8AM-8PM spread).
     """
-    if not channel_created_at:
-        return 1
-    try:
-        from datetime import date as _date
-        created = _date.fromisoformat(channel_created_at[:10])
-        days_live = (_date.today() - created).days
-    except (ValueError, TypeError):
-        return 1
-
-    return 1 if days_live < 7 else 2
+    return 1
 
 
 def _random_daily_slots(slug: str, day, n: int) -> list[tuple[int, int]]:
