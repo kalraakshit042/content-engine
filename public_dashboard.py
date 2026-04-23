@@ -17,6 +17,9 @@ from database.queries import (
     get_all_channels,
     get_channel,
     get_channel_videos,
+    get_global_stats,
+    get_channel_rollups,
+    get_recent_cron_runs,
 )
 
 load_dotenv()
@@ -24,6 +27,16 @@ load_dotenv()
 app = FastAPI(docs_url=None, redoc_url=None)
 
 ET = ZoneInfo("America/New_York")
+
+# Channel identities not disclosed while experiment is active.
+CHANNEL_CODENAMES = {
+    "digital-overlords": "Project NERO",
+    "villian-monologues": "Project ECHO",
+}
+
+
+def _codename(slug: str, fallback: str) -> str:
+    return CHANNEL_CODENAMES.get(slug, fallback)
 
 
 def _fmt_num(n) -> str:
@@ -130,15 +143,14 @@ def _base(title: str, body: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    stats = get_global_stats()
     channels = get_all_channels()
+    rollups = get_channel_rollups()
+    cron_runs = get_recent_cron_runs(limit=1)
+    last_run = cron_runs[0] if cron_runs else None
 
-    total_published = 0
-    total_views = 0
-    for ch in channels:
-        videos = get_channel_videos(ch["slug"])
-        total_published += sum(1 for v in videos if v.get("youtube_status") == "posted")
-        total_views += sum(v.get("youtube_views") or 0 for v in videos)
-
+    total_published = int(stats.get('total_posted') or 0)
+    total_views = int(stats.get('total_views') or 0)
     views_per_video = (total_views // total_published) if total_published else 0
 
     stats_html = f"""
@@ -160,8 +172,13 @@ async def index(request: Request):
   </div>
   <div class="stat-card">
     <div class="label">Channels</div>
-    <div class="value">{len([c for c in channels if c.get('status') == 'active'])}</div>
+    <div class="value">{stats['total_channels']}</div>
     <div class="sub">active</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Last Sync</div>
+    <div class="value" style="font-size:16px;letter-spacing:0">{_fmt_date(last_run['started_at']) if last_run else '—'}</div>
+    <div class="sub">{last_run['status'] if last_run else ''}</div>
   </div>
 </div>
 """
@@ -171,21 +188,21 @@ async def index(request: Request):
         if ch.get("status") != "active":
             continue
         slug = ch["slug"]
+        r = rollups.get(slug, {})
         videos = get_channel_videos(slug)
-        published = [v for v in videos if v.get("youtube_status") == "posted"]
+        published = [v for v in videos if v.get('youtube_status') == 'posted']
         total_yt_views = sum(v.get("youtube_views") or 0 for v in videos)
         vpv = (total_yt_views // len(published)) if published else 0
-
-        yt_badge = '<span class="badge yt">▶ YouTube</span>' if ch.get("youtube_channel_url") else ""
-        tt_badge = '<span class="badge tt">♪ TikTok</span>' if ch.get("tiktok_channel_url") else ""
+        codename = _codename(slug, ch['name'])
+        avg_pct = ch.get("avg_view_percentage")
+        avg_pct_str = f"{avg_pct:.1f}%" if avg_pct else "—"
 
         cards += f"""
 <div class="channel-card">
   <a href="/channel/{slug}" class="card-link"></a>
   <div class="card-content">
-    <div class="name">{ch['name']}</div>
+    <div class="name">{codename}</div>
     <div class="desc">{ch.get('description', '')[:100]}</div>
-    <div class="platform-row">{yt_badge}{tt_badge}</div>
     <div class="metrics">
       <div class="metric">
         <div class="m-label">Views</div>
@@ -196,6 +213,14 @@ async def index(request: Request):
         <div class="m-label">Views / Video</div>
         <div class="m-value">{_fmt_num(vpv)}</div>
       </div>
+      <div class="metric">
+        <div class="m-label">Avg Retention</div>
+        <div class="m-value">{avg_pct_str}</div>
+      </div>
+      <div class="metric">
+        <div class="m-label">Likes</div>
+        <div class="m-value">{_fmt_num(r.get('youtube_likes', 0))}</div>
+      </div>
     </div>
   </div>
 </div>"""
@@ -205,6 +230,7 @@ async def index(request: Request):
 {stats_html}
 <div class="section-title">Channels</div>
 <div class="channels-grid">{cards}</div>
+<p class="experiment-note">Channel identities are not disclosed while the experiment is active.</p>
 """
     return HTMLResponse(_base("Content Engine", body))
 
@@ -215,16 +241,21 @@ async def channel_page(slug: str, request: Request):
     if not ch:
         return HTMLResponse("<h1>Channel not found</h1>", status_code=404)
 
+    codename = _codename(slug, ch['name'])
     videos = get_channel_videos(slug)
-    published = [v for v in videos if v.get("youtube_status") == "posted"]
-    published_sorted = sorted(published, key=lambda v: v.get("youtube_posted_at") or v.get("posted_at") or "")
+    published = [v for v in videos if v.get('youtube_status') == 'posted']
+    published_sorted = sorted(published, key=lambda v: v.get('youtube_views') or 0, reverse=True)
 
     total_yt = sum(v.get("youtube_views") or 0 for v in videos)
     vpv = (total_yt // len(published)) if published else 0
     max_views = max((v.get("youtube_views") or 0 for v in published_sorted), default=1) or 1
 
+    avg_duration = ch.get("avg_view_duration_secs")
+    avg_pct = ch.get("avg_view_percentage")
+    avg_duration_str = f"{int(avg_duration)}s" if avg_duration else "—"
+    avg_pct_str = f"{avg_pct:.1f}%" if avg_pct else "—"
+
     yt_badge = '<span class="badge yt">▶ YouTube</span>' if ch.get("youtube_channel_url") else ""
-    tt_badge = '<span class="badge tt">♪ TikTok</span>' if ch.get("tiktok_channel_url") else ""
 
     rows = ""
     for i, v in enumerate(published_sorted, start=1):
@@ -245,9 +276,9 @@ async def channel_page(slug: str, request: Request):
 <a href="/" class="back">← All channels</a>
 <div class="section-title">Channel</div>
 <div style="margin-bottom:32px">
-  <h2 style="font-size:24px;font-weight:700;margin-bottom:8px">{ch['name']}</h2>
+  <h2 style="font-size:24px;font-weight:700;margin-bottom:8px">{codename}</h2>
   <p style="color:#666;font-size:14px;margin-bottom:16px">{ch.get('description','')}</p>
-  <div class="platform-row">{yt_badge}{tt_badge}</div>
+  <div class="platform-row">{yt_badge}</div>
 </div>
 <div class="stats-row">
   <div class="stat-card">
@@ -259,6 +290,16 @@ async def channel_page(slug: str, request: Request):
     <div class="label">Views / Video</div>
     <div class="value">{_fmt_num(vpv)}</div>
     <div class="sub">avg per published</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg View Duration</div>
+    <div class="value">{avg_duration_str}</div>
+    <div class="sub">per view</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg Retention</div>
+    <div class="value">{avg_pct_str}</div>
+    <div class="sub">of video watched</div>
   </div>
   <div class="stat-card">
     <div class="label">Videos</div>
@@ -278,5 +319,6 @@ async def channel_page(slug: str, request: Request):
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>
+<p class="experiment-note">Channel identity not disclosed while experiment is active.</p>
 """
-    return HTMLResponse(_base(ch['name'], body))
+    return HTMLResponse(_base(codename, body))
