@@ -66,32 +66,45 @@ CSS = """
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
        background: #0a0a0a; color: #e8e8e8; min-height: 100vh; }
 a { color: inherit; text-decoration: none; }
-.header { border-bottom: 1px solid #1e1e1e; padding: 20px 40px; }
-.header h1 { font-size: 18px; font-weight: 600; }
-.header p { font-size: 13px; color: #555; margin-top: 2px; }
+.header { border-bottom: 1px solid #1e1e1e; padding: 20px 40px;
+          display: flex; align-items: center; justify-content: space-between; }
+.header-brand { display: flex; align-items: center; gap: 10px; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf50;
+            flex-shrink: 0; animation: pulse 2.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+.header p { font-size: 13px; color: #888; margin-top: 2px; }
 .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
 .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
              gap: 16px; margin-bottom: 48px; }
 .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 20px; }
-.stat-card .label { font-size: 11px; color: #555; text-transform: uppercase;
+.stat-card .label { font-size: 11px; color: #888; text-transform: uppercase;
                     letter-spacing: 0.6px; margin-bottom: 8px; }
-.stat-card .value { font-size: 28px; font-weight: 700; letter-spacing: -1px; }
-.stat-card .sub { font-size: 12px; color: #444; margin-top: 4px; }
+.stat-card .value { font-size: 28px; font-weight: 700; letter-spacing: -1px;
+                    font-family: ui-monospace, Menlo, 'Courier New', monospace; }
+.stat-card .sub { font-size: 12px; color: #555; margin-top: 4px; }
 .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase;
-                 letter-spacing: 0.8px; color: #666; margin-bottom: 16px; }
+                 letter-spacing: 0.8px; color: #888; margin-bottom: 16px;
+                 border-left: 2px solid #4a7c59; padding-left: 10px; }
 .channels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
                  gap: 16px; margin-bottom: 48px; }
 .channel-card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px;
-                padding: 24px; position: relative; }
+                padding: 24px; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+                cursor: pointer; position: relative; }
+.channel-card:hover { border-color: #333; transform: translateY(-2px);
+                      box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
 .channel-card .card-link { position: absolute; inset: 0; z-index: 0; }
 .channel-card .card-content { position: relative; z-index: 1; }
-.channel-card .name { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-.channel-card .desc { font-size: 13px; color: #666; margin-bottom: 20px; line-height: 1.5; }
+.channel-card .name { font-size: 16px; font-weight: 600; margin-bottom: 4px;
+                      letter-spacing: -0.2px; }
+.channel-card .desc { font-size: 13px; color: #888; margin-bottom: 20px; line-height: 1.5; }
 .channel-card .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.metric .m-label { font-size: 11px; color: #555; text-transform: uppercase;
+.metric { }
+.metric .m-label { font-size: 11px; color: #888; text-transform: uppercase;
                    letter-spacing: 0.4px; margin-bottom: 4px; }
-.metric .m-value { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
-.metric .m-sub { font-size: 11px; color: #444; margin-top: 2px; }
+.metric .m-value { font-size: 20px; font-weight: 700; letter-spacing: -0.5px;
+                   font-family: ui-monospace, Menlo, 'Courier New', monospace; }
+.metric .m-sub { font-size: 11px; color: #555; margin-top: 2px; }
 .platform-row { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
          padding: 5px 10px; border-radius: 20px; border: 1px solid #1e1e1e;
@@ -100,12 +113,13 @@ a { color: inherit; text-decoration: none; }
 .badge.tt { border-color: #14142e; color: #445599; background: rgba(107,107,255,0.05); }
 .perf-table { width: 100%; border-collapse: collapse; }
 .perf-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
-                 color: #555; text-align: left; padding: 10px 12px;
+                 color: #888; text-align: left; padding: 10px 12px;
                  border-bottom: 1px solid #1e1e1e; background: #0e0e0e; }
 .perf-table td { font-size: 13px; padding: 10px 12px; border-bottom: 1px solid #141414;
-                 color: #ccc; }
-.perf-table td.label-col { color: #666; font-size: 12px; }
+                 color: #ccc; font-family: ui-monospace, Menlo, 'Courier New', monospace; }
+.perf-table td.label-col { font-family: inherit; color: #888; font-size: 12px; }
 .perf-table tr:nth-child(even) td { background: #0d0d0d; }
+.perf-table tr:hover td { background: #161616; }
 .view-bar-wrap { display: flex; align-items: center; gap: 10px; }
 .view-bar { height: 3px; background: #2a2a2a; border-radius: 2px; flex: 1; max-width: 80px; }
 .view-bar-fill { height: 3px; background: #3a5a3a; border-radius: 2px; }
@@ -114,7 +128,7 @@ a { color: inherit; text-decoration: none; }
 .divider { border: none; border-top: 1px solid #1e1e1e; margin: 40px 0; }
 .experiment-note { font-size: 12px; color: #444; margin-top: 40px; padding-top: 20px;
                    border-top: 1px solid #1a1a1a; text-align: center; }
-footer { text-align: center; padding: 32px; font-size: 12px; color: #444;
+footer { text-align: center; padding: 32px; font-size: 12px; color: #555;
          border-top: 1px solid #1a1a1a; margin-top: 40px; }
 """
 
@@ -130,8 +144,13 @@ def _base(title: str, body: str) -> str:
 </head>
 <body>
 <div class="header">
-  <h1>Content Engine</h1>
-  <p>Autonomous AI video publishing</p>
+  <div>
+    <div class="header-brand">
+      <div class="live-dot"></div>
+      <h1>Content Engine</h1>
+    </div>
+    <p>Autonomous AI video publishing</p>
+  </div>
 </div>
 <div class="container">
 {body}
