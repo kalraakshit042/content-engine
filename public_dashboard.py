@@ -90,11 +90,9 @@ a { color: inherit; text-decoration: none; }
                  gap: 16px; margin-bottom: 48px; }
 .channel-card { background: #1a2332; border: 1px solid #2a3a4e; border-radius: 10px;
                 padding: 24px; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
-                cursor: pointer; position: relative; }
+                cursor: pointer; display: block; position: relative; }
 .channel-card:hover { border-color: #6096ba; transform: translateY(-2px);
                       box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-.channel-card .card-link { position: absolute; inset: 0; z-index: 0; }
-.channel-card .card-content { position: relative; z-index: 1; }
 .channel-card .name { font-size: 16px; font-weight: 600; margin-bottom: 4px;
                       letter-spacing: -0.2px; }
 .channel-card .desc { font-size: 13px; color: #8faabe; margin-bottom: 20px; line-height: 1.5; }
@@ -209,7 +207,7 @@ async def index(request: Request):
         slug = ch["slug"]
         r = rollups.get(slug, {})
         videos = get_channel_videos(slug)
-        published = [v for v in videos if v.get('youtube_status') == 'posted']
+        published = [v for v in videos if v.get('youtube_status') == 'posted' and (v.get('youtube_views') or 0) > 0]
         total_yt_views = sum(v.get("youtube_views") or 0 for v in videos)
         vpv = (total_yt_views // len(published)) if published else 0
         codename = _codename(slug, ch['name'])
@@ -217,32 +215,29 @@ async def index(request: Request):
         avg_pct_str = f"{avg_pct:.1f}%" if avg_pct else "—"
 
         cards += f"""
-<div class="channel-card">
-  <a href="/channel/{slug}" class="card-link"></a>
-  <div class="card-content">
-    <div class="name">{codename}</div>
-    <div class="desc">{ch.get('description', '')[:100]}</div>
-    <div class="metrics">
-      <div class="metric">
-        <div class="m-label">Views</div>
-        <div class="m-value">{_fmt_num(total_yt_views)}</div>
-        <div class="m-sub">{len(published)} videos</div>
-      </div>
-      <div class="metric">
-        <div class="m-label">Views / Video</div>
-        <div class="m-value">{_fmt_num(vpv)}</div>
-      </div>
-      <div class="metric">
-        <div class="m-label">Avg Retention</div>
-        <div class="m-value">{avg_pct_str}</div>
-      </div>
-      <div class="metric">
-        <div class="m-label">Likes</div>
-        <div class="m-value">{_fmt_num(r.get('youtube_likes', 0))}</div>
-      </div>
+<a href="/channel/{slug}" class="channel-card">
+  <div class="name">{codename}</div>
+  <div class="desc">{ch.get('description', '')[:100]}</div>
+  <div class="metrics">
+    <div class="metric">
+      <div class="m-label">Views</div>
+      <div class="m-value">{_fmt_num(total_yt_views)}</div>
+      <div class="m-sub">{len(published)} videos</div>
+    </div>
+    <div class="metric">
+      <div class="m-label">Views / Video</div>
+      <div class="m-value">{_fmt_num(vpv)}</div>
+    </div>
+    <div class="metric">
+      <div class="m-label">Avg Retention</div>
+      <div class="m-value">{avg_pct_str}</div>
+    </div>
+    <div class="metric">
+      <div class="m-label">Likes</div>
+      <div class="m-value">{_fmt_num(r.get('youtube_likes', 0))}</div>
     </div>
   </div>
-</div>"""
+</a>"""
 
     body = f"""
 <div class="section-title">Overview</div>
@@ -262,7 +257,7 @@ async def channel_page(slug: str, request: Request):
 
     codename = _codename(slug, ch['name'])
     videos = get_channel_videos(slug)
-    published = [v for v in videos if v.get('youtube_status') == 'posted']
+    published = [v for v in videos if v.get('youtube_status') == 'posted' and (v.get('youtube_views') or 0) > 0]
     published_sorted = sorted(published, key=lambda v: v.get('youtube_views') or 0, reverse=True)
 
     total_yt = sum(v.get("youtube_views") or 0 for v in videos)
