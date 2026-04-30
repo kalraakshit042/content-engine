@@ -128,6 +128,13 @@ a { color: inherit; text-decoration: none; }
                    border-top: 1px solid #1e2c3e; text-align: center; }
 footer { text-align: center; padding: 32px; font-size: 12px; color: #4a6a8a;
          border-top: 1px solid #1e2c3e; margin-top: 40px; }
+.pagination { display: flex; align-items: center; justify-content: space-between;
+              margin-top: 16px; padding: 12px 0; }
+.page-btn { font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid #2a3a4e;
+            color: #8faabe; text-decoration: none; }
+.page-btn:hover { border-color: #6096ba; color: #e7ecef; }
+.page-btn.disabled { color: #2a3a4e; border-color: #1e2c3e; cursor: default; pointer-events: none; }
+.page-info { font-size: 12px; color: #4a6a8a; }
 """
 
 
@@ -250,7 +257,7 @@ async def index(request: Request):
 
 
 @app.get("/channel/{slug}", response_class=HTMLResponse)
-async def channel_page(slug: str, request: Request):
+async def channel_page(slug: str, request: Request, page: int = 0):
     ch = get_channel(slug)
     if not ch:
         return HTMLResponse("<h1>Channel not found</h1>", status_code=404)
@@ -271,9 +278,17 @@ async def channel_page(slug: str, request: Request):
 
     yt_badge = '<span class="badge yt">▶ YouTube</span>' if ch.get("youtube_channel_url") else ""
 
+    page_size = 10
+    total_pages = max(1, (len(published_sorted) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    page_videos = published_sorted[page * page_size:(page + 1) * page_size]
+    offset = page * page_size
+
     rows = ""
-    for i, v in enumerate(published_sorted, start=1):
+    for i, v in enumerate(page_videos, start=offset + 1):
         views = v.get("youtube_views") or 0
+        likes = v.get("youtube_likes") or 0
+        comments = v.get("youtube_comments") or 0
         bar_pct = int((views / max_views) * 100)
         rows += f"""<tr>
           <td class="label-col">Unit #{i:02d}</td>
@@ -284,7 +299,13 @@ async def channel_page(slug: str, request: Request):
               <div class="view-bar"><div class="view-bar-fill" style="width:{bar_pct}%"></div></div>
             </div>
           </td>
+          <td>{_fmt_num(likes)}</td>
+          <td>{_fmt_num(comments)}</td>
         </tr>"""
+
+    prev_btn = f'<a href="/channel/{slug}?page={page - 1}" class="page-btn">← Prev</a>' if page > 0 else '<span class="page-btn disabled">← Prev</span>'
+    next_btn = f'<a href="/channel/{slug}?page={page + 1}" class="page-btn">Next →</a>' if page < total_pages - 1 else '<span class="page-btn disabled">Next →</span>'
+    pagination = f"""<div class="pagination">{prev_btn}<span class="page-info">Page {page + 1} of {total_pages} · {len(published_sorted)} videos</span>{next_btn}</div>"""
 
     body = f"""
 <a href="/" class="back">← All channels</a>
@@ -329,10 +350,11 @@ async def channel_page(slug: str, request: Request):
 <div class="section-title">Performance by Unit</div>
 <table class="perf-table">
   <thead><tr>
-    <th>Unit</th><th>Published</th><th>Views</th>
+    <th>Unit</th><th>Published</th><th>Views</th><th>Likes</th><th>Comments</th>
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>
+{pagination}
 <p class="experiment-note">Channel identity not disclosed while experiment is active.</p>
 """
     return HTMLResponse(_base(codename, body))
