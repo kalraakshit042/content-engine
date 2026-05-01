@@ -160,7 +160,7 @@ def _base(title: str, body: str) -> str:
 <div class="container">
 {body}
 </div>
-<footer>Updated live · Powered by Claude + automated pipeline</footer>
+<footer>Built by <a href="https://akshitkalra.com/" style="color:#9a9087;text-decoration:underline;text-underline-offset:3px;">Akshit Kalra</a></footer>
 </body>
 </html>"""
 
