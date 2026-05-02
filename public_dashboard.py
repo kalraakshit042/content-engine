@@ -26,6 +26,7 @@ load_dotenv()
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
+BASE = "/projects/Contentautomation"
 ET = ZoneInfo("America/New_York")
 
 # Channel identities not disclosed while experiment is active.
@@ -165,7 +166,7 @@ def _base(title: str, body: str) -> str:
 </html>"""
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get(BASE, response_class=HTMLResponse)
 async def index(request: Request):
     stats = get_global_stats()
     channels = get_all_channels()
@@ -222,7 +223,7 @@ async def index(request: Request):
         avg_pct_str = f"{avg_pct:.1f}%" if avg_pct else "—"
 
         cards += f"""
-<a href="/channel/{slug}" class="channel-card">
+<a href="{BASE}/channel/{slug}" class="channel-card">
   <div class="name">{codename}</div>
   <div class="desc">{ch.get('description', '')[:100]}</div>
   <div class="metrics">
@@ -256,7 +257,7 @@ async def index(request: Request):
     return HTMLResponse(_base("Content Engine", body))
 
 
-@app.get("/channel/{slug}", response_class=HTMLResponse)
+@app.get(BASE + "/channel/{slug}", response_class=HTMLResponse)
 async def channel_page(slug: str, request: Request, page: int = 0):
     ch = get_channel(slug)
     if not ch:
@@ -303,12 +304,12 @@ async def channel_page(slug: str, request: Request, page: int = 0):
           <td>{_fmt_num(comments)}</td>
         </tr>"""
 
-    prev_btn = f'<a href="/channel/{slug}?page={page - 1}" class="page-btn">← Prev</a>' if page > 0 else '<span class="page-btn disabled">← Prev</span>'
-    next_btn = f'<a href="/channel/{slug}?page={page + 1}" class="page-btn">Next →</a>' if page < total_pages - 1 else '<span class="page-btn disabled">Next →</span>'
+    prev_btn = f'<a href="{BASE}/channel/{slug}?page={page - 1}" class="page-btn">← Prev</a>' if page > 0 else '<span class="page-btn disabled">← Prev</span>'
+    next_btn = f'<a href="{BASE}/channel/{slug}?page={page + 1}" class="page-btn">Next →</a>' if page < total_pages - 1 else '<span class="page-btn disabled">Next →</span>'
     pagination = f"""<div class="pagination">{prev_btn}<span class="page-info">Page {page + 1} of {total_pages} · {len(published_sorted)} videos</span>{next_btn}</div>"""
 
     body = f"""
-<a href="/" class="back">← All channels</a>
+<a href="{BASE}" class="back">← All channels</a>
 <div class="section-title">Channel</div>
 <div style="margin-bottom:32px">
   <h2 style="font-size:24px;font-weight:700;margin-bottom:8px">{codename}</h2>
