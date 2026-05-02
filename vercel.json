@@ -2,8 +2,7 @@
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": { "installCommand": "pip install -r requirements-vercel.txt" }
+      "use": "@vercel/python"
     }
   ],
   "routes": [
