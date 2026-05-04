@@ -4,15 +4,7 @@ Fully automated YouTube Shorts factory — topic to upload, minimal input after 
 
 **Status: Live and actively iterating.**
 
-| Metric | Value |
-|--------|-------|
-| Launch date | April 5, 2026 |
-| Active channels | 2 |
-| Total views (as of Apr 9) | 300+ |
-| Average stayed-to-watch | ~30% |
-| Average view duration | ~24% of video length |
-
-*Updated weekly.*
+**Live stats:** [akshitkalra.com/projects/Contentautomation](https://akshitkalra.com/projects/Contentautomation)
 
 ---
 
@@ -59,9 +51,9 @@ Layer 2: Script Generation   → layer2_script_generation/
 Layer 3: Audio Production    → layer3_audio_production/
 Layer 4: Video Assembly      → layer4_video_production/
 Layer 5: Publishing          → layer5_publishing/
-Dashboard                    → web_dashboard.py
+Dashboard                    → public_dashboard.py (public) · web_dashboard.py (internal)
 Scheduler                    → scheduler.py
-State                        → SQLite (4 databases)
+State                        → Postgres (Supabase)
 ```
 
 ### Layer 2 — Script Generation (Claude Haiku)
@@ -99,8 +91,8 @@ State                        → SQLite (4 databases)
 - Randomized posting windows within 10AM–8PM to avoid pattern detection
 
 ### Dashboard
-- FastAPI, localhost:8000
-- Real-time pipeline status, per-channel post history, failure logs
+- **Public:** [akshitkalra.com/projects/Contentautomation](https://akshitkalra.com/projects/Contentautomation) — read-only stats, no auth required
+- **Internal:** FastAPI, localhost:8000 — full pipeline management, failure logs
 
 ---
 
@@ -118,16 +110,17 @@ per-act ceilings (Hook ≤12, Build ≤30, Re-hook ≤25, Peak ≤25), validated
 after each generation attempt. Violations get fed back into the next prompt turn
 explicitly. Three attempts, then pick the least-bad result.
 
-**Why SQLite over Postgres?**
-Single-machine deployment. No ops overhead. Four databases for clean
-separation: videos, subjects, schedules, publishing state.
+**Why Postgres (Supabase) over SQLite?**
+Moved from SQLite after the pipeline went live — needed remote access for the
+public dashboard running on Vercel. Supabase's connection pooler handles
+serverless connections cleanly without persistent connections.
 
 ---
 
 ## Stack
 
 Claude Haiku · Kokoro TTS · ffmpeg · Pillow · Pexels API
-YouTube Data API v3 · Playwright · FastAPI · SQLite · macOS cron
+YouTube Data API v3 · Playwright · FastAPI · Postgres · macOS cron
 
 ---
 
@@ -157,7 +150,7 @@ python3 scheduler.py   # or add to crontab
 
 ## What's Not Included
 
-`.env`, `credentials/`, `channels/`, `*.db` — API keys, OAuth tokens,
+`.env`, `credentials/`, `channels/` — API keys, OAuth tokens,
 channel configs, music tracks, and generated content are all private.
 
 ---
