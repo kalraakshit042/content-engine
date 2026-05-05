@@ -6,6 +6,11 @@ Fully automated YouTube Shorts factory — topic to upload, minimal input after 
 
 **Live stats:** [akshitkalra.com/projects/Contentautomation](https://akshitkalra.com/projects/Contentautomation)
 
+![Views](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fakshitkalra.com%2Fprojects%2FContentautomation%2Fstats.json&query=%24.total_views&label=Total%20Views&color=6096ba&style=flat-square)
+![Videos](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fakshitkalra.com%2Fprojects%2FContentautomation%2Fstats.json&query=%24.videos_published&label=Videos%20Published&color=6096ba&style=flat-square)
+![Channels](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fakshitkalra.com%2Fprojects%2FContentautomation%2Fstats.json&query=%24.channels&label=Channels&color=6096ba&style=flat-square)
+![Views/Video](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fakshitkalra.com%2Fprojects%2FContentautomation%2Fstats.json&query=%24.views_per_video&label=Views%2FVideo&color=6096ba&style=flat-square)
+
 ---
 
 ## What This Is

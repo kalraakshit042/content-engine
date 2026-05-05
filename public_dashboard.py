@@ -10,7 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
 
 from database.queries import (
@@ -164,6 +164,19 @@ def _base(title: str, body: str) -> str:
 <footer>Built by <a href="https://akshitkalra.com/" style="color:#9a9087;text-decoration:underline;text-underline-offset:3px;">Akshit Kalra</a></footer>
 </body>
 </html>"""
+
+
+@app.get(BASE + "/stats.json", response_class=JSONResponse)
+async def stats_json():
+    stats = get_global_stats()
+    total_published = int(stats.get("total_posted") or 0)
+    total_views = int(stats.get("total_views") or 0)
+    return {
+        "total_views": total_views,
+        "videos_published": total_published,
+        "channels": int(stats.get("total_channels") or 0),
+        "views_per_video": (total_views // total_published) if total_published else 0,
+    }
 
 
 @app.get(BASE, response_class=HTMLResponse)
