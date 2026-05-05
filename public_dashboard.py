@@ -34,6 +34,10 @@ CHANNEL_CODENAMES = {
     "digital-overlords": "Project NERO",
     "villian-monologues": "Project ECHO",
 }
+# URL slug → real slug (e.g. "project-nero" → "digital-overlords")
+CODENAME_SLUG_TO_SLUG = {
+    v.lower().replace(" ", "-"): k for k, v in CHANNEL_CODENAMES.items()
+}
 
 
 def _codename(slug: str, fallback: str) -> str:
@@ -232,11 +236,12 @@ async def index(request: Request):
         total_yt_views = sum(v.get("youtube_views") or 0 for v in videos)
         vpv = (total_yt_views // len(published)) if published else 0
         codename = _codename(slug, ch['name'])
+        url_slug = codename.lower().replace(" ", "-")
         avg_pct = ch.get("avg_view_percentage")
         avg_pct_str = f"{avg_pct:.1f}%" if avg_pct else "—"
 
         cards += f"""
-<a href="{BASE}/channel/{slug}" class="channel-card">
+<a href="{BASE}/channel/{url_slug}" class="channel-card">
   <div class="name">{codename}</div>
   <div class="desc">{ch.get('description', '')[:100]}</div>
   <div class="metrics">
@@ -270,8 +275,9 @@ async def index(request: Request):
     return HTMLResponse(_base("Content Engine", body))
 
 
-@app.get(BASE + "/channel/{slug}", response_class=HTMLResponse)
-async def channel_page(slug: str, request: Request, page: int = 0):
+@app.get(BASE + "/channel/{url_slug}", response_class=HTMLResponse)
+async def channel_page(url_slug: str, request: Request, page: int = 0):
+    slug = CODENAME_SLUG_TO_SLUG.get(url_slug, url_slug)
     ch = get_channel(slug)
     if not ch:
         return HTMLResponse("<h1>Channel not found</h1>", status_code=404)
@@ -317,8 +323,8 @@ async def channel_page(slug: str, request: Request, page: int = 0):
           <td>{_fmt_num(comments)}</td>
         </tr>"""
 
-    prev_btn = f'<a href="{BASE}/channel/{slug}?page={page - 1}" class="page-btn">← Prev</a>' if page > 0 else '<span class="page-btn disabled">← Prev</span>'
-    next_btn = f'<a href="{BASE}/channel/{slug}?page={page + 1}" class="page-btn">Next →</a>' if page < total_pages - 1 else '<span class="page-btn disabled">Next →</span>'
+    prev_btn = f'<a href="{BASE}/channel/{url_slug}?page={page - 1}" class="page-btn">← Prev</a>' if page > 0 else '<span class="page-btn disabled">← Prev</span>'
+    next_btn = f'<a href="{BASE}/channel/{url_slug}?page={page + 1}" class="page-btn">Next →</a>' if page < total_pages - 1 else '<span class="page-btn disabled">Next →</span>'
     pagination = f"""<div class="pagination">{prev_btn}<span class="page-info">Page {page + 1} of {total_pages} · {len(published_sorted)} videos</span>{next_btn}</div>"""
 
     body = f"""
