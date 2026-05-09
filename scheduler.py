@@ -39,7 +39,7 @@ load_dotenv(override=True)
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 
-from database.setup import setup_channels_db, setup_videos_db, setup_costs_db, setup_ops_db
+from database.setup import setup_postgres
 from database.queries import (
     count_generated_today,
     count_posted_today,
@@ -440,10 +440,7 @@ def generate_due_videos(run_id: int) -> dict[str, int]:
 
 
 def run_hourly_job(triggered_by: str = "cron") -> int:
-    setup_channels_db()
-    setup_videos_db()
-    setup_costs_db()
-    setup_ops_db()
+    setup_postgres()
     migration_result = migrate_post_storage()
     LOG_DIR.mkdir(exist_ok=True)
 
